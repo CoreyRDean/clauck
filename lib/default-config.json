@@ -1,0 +1,8 @@
+{
+  "_comment": "open-claude-cron configuration. This file is copied to ~/.claude/scheduled-jobs/.open-claude-cron.config.json by the installer ONLY when no config exists there. Upgrades will never overwrite your settings.",
+  "auto_update": {
+    "enabled": true,
+    "check_interval_seconds": 3600,
+    "auto_apply": false
+  }
+}

@@ -1,0 +1,42 @@
+{
+  "version": "0.1.0",
+  "description": "Curated pre-made scheduled-job prompts for open-claude-cron. Browse by category or tags; ask Claude to copy one into your scheduled-jobs directory to install.",
+  "jobs": [
+    {
+      "name": "daily-verify",
+      "path": "verification/daily-verify.md",
+      "category": "verification",
+      "tags": ["health-check", "daily", "mcp", "notification"],
+      "one_line": "Daily MCP-surface health check posted to your choice of Slack/Discord/Jira/Gmail/local file.",
+      "schedule": "daily at 14:00 UTC (configurable)",
+      "cost_per_run_usd_approx": 0.20,
+      "runs_per_month_approx": 30,
+      "monthly_cost_usd_approx": 6.00,
+      "requires": {
+        "mcps": "at least one of: Slack, Discord, Jira, Gmail (OR none if you use local-file mode)",
+        "setup": [
+          "Edit the prompt body to pick ONE destination (marked in the template comment).",
+          "Fill in channel ID / ticket key / recipient for your chosen destination."
+        ]
+      }
+    },
+    {
+      "name": "downloads-triage",
+      "path": "organization/downloads-triage.md",
+      "category": "organization",
+      "tags": ["file-watcher", "downloads", "triage", "external-trigger"],
+      "one_line": "Fires when new files land in ~/Downloads (60s quiet period). Categorizes and suggests destinations; logs to a feed file.",
+      "schedule": "event-driven (file_added external trigger); debounced to at most once per 5 minutes",
+      "cost_per_run_usd_approx": 0.04,
+      "runs_per_month_approx": "varies with download activity",
+      "monthly_cost_usd_approx": "typically <$1",
+      "requires": {
+        "mcps": "none",
+        "setup": [
+          "Optional: change the watched path or quiet_seconds window.",
+          "Optional: point the feed file somewhere other than the default."
+        ]
+      }
+    }
+  ]
+}

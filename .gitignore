@@ -1,0 +1,11 @@
+# Editor / OS cruft
+.DS_Store
+*.swp
+*.swo
+.idea/
+.vscode/
+
+# Never commit a user's runtime state
+*.log
+.state/
+.manifest.json
