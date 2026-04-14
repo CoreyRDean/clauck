@@ -179,8 +179,9 @@ if ! curl -fsSL --max-time 30 "$INSTALLER_URL" -o "$TMP_INSTALLER"; then
     exit 3
 fi
 
-# Pass the branch env var so the installer clones the release tag, not main.
-if OPEN_CLAUDE_CRON_BRANCH="$LATEST_TAG" bash "$TMP_INSTALLER"; then
+# Pass --yes so the installer doesn't prompt (we're non-interactive),
+# and the branch env var so it clones the release tag, not main.
+if OPEN_CLAUDE_CRON_BRANCH="$LATEST_TAG" bash "$TMP_INSTALLER" --yes; then
     rm -f "$AVAILABLE_FILE"
     log "✓ update applied; now on $LATEST_TAG"
     exit 0

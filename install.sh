@@ -82,7 +82,9 @@ prompt() {
     else
         resp="$default"
     fi
-    case "${resp,,}" in
+    # Portable lowercase (bash 3.2 on macOS doesn't support ${var,,}).
+    resp="$(printf '%s' "$resp" | tr '[:upper:]' '[:lower:]')"
+    case "$resp" in
         y|yes) return 0 ;;
         *)     return 1 ;;
     esac
