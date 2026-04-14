@@ -191,13 +191,73 @@ RUNTIME_CONTEXT="# Runtime Context (this invocation)
 - **Manifest (all jobs, with semantic_hooks and trigger_commands):** ${JOBS_DIR}/.manifest.json
 - **Per-job state directory:** ${JOBS_DIR}/.state/
 
-Spend proportional to value. Budget is a cap, not a target. If there is nothing meaningful to do, exit cleanly with a brief note — a no-op is a legitimate outcome for a scheduled invocation."
+Spend proportional to value. Budget is a cap, not a target. If there is nothing meaningful to do, exit cleanly with a brief note — a no-op is a legitimate outcome for a scheduled invocation.
+These limits are enforced — exceeding max_budget_usd or max_turns terminates the session immediately."
+
+# --- Inject producer outputs if this job was invoked as part of a pipeline ---
+PRODUCER_OUTPUTS=""
+# Find the most recent producer-outputs file for this job (left by dag-runner.py)
+PRODUCER_FILE=$(ls -t "$STATE_DIR/${JOB_NAME}.producer-outputs-"*.json 2>/dev/null | head -1)
+if [ -n "$PRODUCER_FILE" ] && [ -f "$PRODUCER_FILE" ]; then
+  PRODUCER_OUTPUTS=$(/usr/bin/python3 -c "
+import json, sys
+try:
+    data = json.load(open('$PRODUCER_FILE'))
+    parts = []
+
+    # Producer outputs section
+    producers = data.get('producers', {})
+    if producers:
+        parts.append('## Producer outputs\n')
+        for name, info in producers.items():
+            exit_code = info.get('exit_code', '?')
+            cost = info.get('cost', '?')
+            result = info.get('result', '')
+            parts.append(f'### {name} (exit {exit_code}, \${cost})')
+            parts.append(result)
+            parts.append('')
+
+    # Oplog section
+    oplog = data.get('oplog', [])
+    if oplog:
+        parts.append('## Execution chain (oplog)\n')
+        for entry in oplog:
+            ts = entry.get('ts', '?')
+            job = entry.get('job', '?')
+            event = entry.get('event', '?')
+            extra = ''
+            if 'exit_code' in entry:
+                extra = f' exit={entry[\"exit_code\"]}'
+            if 'cost' in entry:
+                extra += f' \${entry[\"cost\"]}'
+            parts.append(f'- {ts} {job} {event}{extra}')
+
+    print('\n'.join(parts))
+except Exception as e:
+    print(f'[producer output parse error: {e}]', file=sys.stderr)
+" 2>/dev/null)
+
+  # Clean up the producer file after reading (one-time delivery)
+  rm -f "$PRODUCER_FILE"
+
+  if [ -n "$PRODUCER_OUTPUTS" ]; then
+    echo "stage=pipeline_inputs producer_file=$(basename $PRODUCER_FILE)" >> "$LOG_FILE"
+  fi
+fi
 
 APPENDED_SYSTEM_PROMPT="${GLOBAL_PROMPT_TEXT}
 
 ---
 
 ${RUNTIME_CONTEXT}"
+
+if [ -n "$PRODUCER_OUTPUTS" ]; then
+  APPENDED_SYSTEM_PROMPT="${APPENDED_SYSTEM_PROMPT}
+
+---
+
+${PRODUCER_OUTPUTS}"
+fi
 
 echo "stage=run" >> "$LOG_FILE"
 echo "--- runtime_context ---" >> "$LOG_FILE"

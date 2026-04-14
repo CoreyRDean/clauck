@@ -35,6 +35,7 @@ STATE_DIR = JOBS_DIR / ".state"
 GLOBAL_PROMPT = HOME / ".claude" / "scheduled-jobs-prompt.md"
 MANIFEST_PATH = JOBS_DIR / ".manifest.json"
 RUN_JOB = JOBS_DIR / "run-job.sh"
+DAG_RUNNER = JOBS_DIR / "dag-runner.py"
 UPDATE_CHECK = JOBS_DIR / "update-check.sh"
 CONFIG_PATH = JOBS_DIR / ".clauck.config.json"
 UPDATE_LAST_CHECK = STATE_DIR / ".update-last-check"
@@ -270,6 +271,9 @@ def discover_jobs() -> list[dict]:
                 # each tick. See eval_* functions for supported types.
                 "external_triggers": list(fm.get("external_triggers", []) or []),
                 "semantic_hooks": list(fm.get("semantic_hooks", []) or []),
+                # --- pipeline ---
+                "producers": list(fm.get("producers", []) or []),
+                "consumers": list(fm.get("consumers", []) or []),
             }
         )
     return jobs
@@ -532,6 +536,45 @@ def _eval_command_succeeds(trig: dict, state: dict | None) -> tuple[dict, bool]:
 # ---------- manifest ----------
 
 
+def detect_cycles(jobs):
+    """Check for cycles in the producer graph. Returns list of error strings."""
+    # Build adjacency: job -> its producers
+    graph = {}
+    names = set()
+    for j in jobs:
+        name = j["name"]
+        names.add(name)
+        producers = [p["name"] if isinstance(p, dict) else p for p in j.get("producers", [])]
+        graph[name] = producers
+
+    errors = []
+    # DFS cycle detection
+    WHITE, GRAY, BLACK = 0, 1, 2
+    color = {n: WHITE for n in names}
+
+    def dfs(node, path):
+        if node not in color:
+            errors.append(f"producer '{node}' referenced but no job file exists")
+            return
+        if color[node] == GRAY:
+            cycle = path[path.index(node):]
+            errors.append(f"cycle detected: {' -> '.join(cycle + [node])}")
+            return
+        if color[node] == BLACK:
+            return
+        color[node] = GRAY
+        path.append(node)
+        for dep in graph.get(node, []):
+            dfs(dep, path)
+        path.pop()
+        color[node] = BLACK
+
+    for name in names:
+        if color[name] == WHITE:
+            dfs(name, [])
+    return errors
+
+
 def write_manifest(jobs: list[dict]) -> None:
     payload = {
         "generated_at": datetime.now(timezone.utc).isoformat(),
@@ -544,12 +587,17 @@ def write_manifest(jobs: list[dict]) -> None:
                 "disabled": bool(j.get("disabled", False)),
                 "semantic_hooks": j["semantic_hooks"],
                 "external_triggers": j.get("external_triggers", []),
+                "producers": j.get("producers", []),
+                "consumers": j.get("consumers", []),
                 "trigger_command": f'{JOBS_DIR / "trigger-job.sh"} {j["name"]}',
                 "prompt_path": j["path"],
             }
             for j in jobs
         ],
     }
+    dag_errors = detect_cycles(jobs)
+    if dag_errors:
+        payload["dag_errors"] = dag_errors
     JOBS_DIR.mkdir(parents=True, exist_ok=True)
     MANIFEST_PATH.write_text(json.dumps(payload, indent=2))
 
@@ -733,7 +781,30 @@ def tick() -> None:
         if evaluate_external_triggers(job):
             set_last_run(name, minute_start)
             print(f"[scheduler] firing {name} @ {now.isoformat()} (external trigger)")
-            fire(job, trigger="external")
+            if job.get("producers"):
+                # Delegate to DAG runner
+                env = os.environ.copy()
+                env["CLAUDE_JOB_NAME"] = job["name"]
+                env["CLAUDE_JOB_PATH"] = job["path"]
+                env["CLAUDE_JOB_CWD"] = job["cwd"]
+                env["CLAUDE_JOB_MAX_TURNS"] = str(job["max_turns"])
+                env["CLAUDE_JOB_MAX_BUDGET_USD"] = str(job["max_budget_usd"])
+                env["CLAUDE_JOB_EFFORT"] = job["effort"]
+                env["CLAUDE_JOB_CRON"] = job["cron"]
+                env["CLAUDE_JOB_MODEL"] = job.get("model", "")
+                env["CLAUDE_JOB_TRIGGER"] = "external"
+                env["CLAUDE_JOB_FIRED_AT"] = datetime.now(timezone.utc).isoformat()
+                subprocess.Popen(
+                    ["/usr/bin/python3", str(DAG_RUNNER), job["name"]],
+                    env=env,
+                    stdin=subprocess.DEVNULL,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    start_new_session=True,
+                    close_fds=True,
+                )
+            else:
+                fire(job, trigger="external")
             fired = True
         else:
             # Cron evaluation.
@@ -742,7 +813,30 @@ def tick() -> None:
                     if cron_matches(job["cron"], now):
                         set_last_run(name, minute_start)
                         print(f"[scheduler] firing {name} @ {now.isoformat()}")
-                        fire(job)
+                        if job.get("producers"):
+                            # Delegate to DAG runner
+                            env = os.environ.copy()
+                            env["CLAUDE_JOB_NAME"] = job["name"]
+                            env["CLAUDE_JOB_PATH"] = job["path"]
+                            env["CLAUDE_JOB_CWD"] = job["cwd"]
+                            env["CLAUDE_JOB_MAX_TURNS"] = str(job["max_turns"])
+                            env["CLAUDE_JOB_MAX_BUDGET_USD"] = str(job["max_budget_usd"])
+                            env["CLAUDE_JOB_EFFORT"] = job["effort"]
+                            env["CLAUDE_JOB_CRON"] = job["cron"]
+                            env["CLAUDE_JOB_MODEL"] = job.get("model", "")
+                            env["CLAUDE_JOB_TRIGGER"] = "scheduled"
+                            env["CLAUDE_JOB_FIRED_AT"] = datetime.now(timezone.utc).isoformat()
+                            subprocess.Popen(
+                                ["/usr/bin/python3", str(DAG_RUNNER), job["name"]],
+                                env=env,
+                                stdin=subprocess.DEVNULL,
+                                stdout=subprocess.DEVNULL,
+                                stderr=subprocess.DEVNULL,
+                                start_new_session=True,
+                                close_fds=True,
+                            )
+                        else:
+                            fire(job)
                         fired = True
                 except ValueError as e:
                     print(f"[scheduler] bad cron for {name}: {e}", file=sys.stderr)
@@ -763,7 +857,22 @@ def trigger(name: str) -> None:
     if not jobs:
         print(f"[scheduler] no job named {name!r}", file=sys.stderr)
         sys.exit(2)
-    fire(jobs[0], trigger="adhoc")
+    job = jobs[0]
+    # If the job has producers, delegate to the DAG runner instead of direct fire.
+    if job.get("producers"):
+        env = os.environ.copy()
+        env["CLAUDE_JOB_TRIGGER"] = "adhoc"
+        subprocess.Popen(
+            ["/usr/bin/python3", str(DAG_RUNNER), name],
+            env=env,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            start_new_session=True,
+            close_fds=True,
+        )
+    else:
+        fire(job, trigger="adhoc")
     print(f"[scheduler] ad-hoc triggered {name}")
 
 

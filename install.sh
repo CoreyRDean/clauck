@@ -215,6 +215,7 @@ install_files() {
     # Install the clauck CLI to ~/.local/bin (same location as claude CLI).
     run mkdir -p "$HOME/.local/bin"
     install_file "$repo/lib/clauck"                   "$HOME/.local/bin/clauck"                     755
+    install_file "$repo/lib/dag-runner.py"              "$HOME/.claude/scheduled-jobs/dag-runner.py"  755
     install_file "$repo/lib/scheduled-jobs-prompt.md" "$HOME/.claude/scheduled-jobs-prompt.md"      644
     install_file "$repo/lib/scheduled-jobs-notice.sh" "$HOME/.claude/hooks/scheduled-jobs-notice.sh" 755
 

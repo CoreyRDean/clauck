@@ -43,6 +43,7 @@ FILES=(
     "$HOME/.claude/scheduled-jobs/run-job.sh"
     "$HOME/.claude/scheduled-jobs/trigger-job.sh"
     "$HOME/.claude/scheduled-jobs/update-check.sh"
+    "$HOME/.claude/scheduled-jobs/dag-runner.py"
     "$HOME/.claude/scheduled-jobs/.version"
     "$HOME/.claude/scheduled-jobs-prompt.md"
     "$HOME/.claude/hooks/scheduled-jobs-notice.sh"

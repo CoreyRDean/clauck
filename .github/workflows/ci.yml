@@ -24,7 +24,9 @@ jobs:
       - name: Parse-check Python
         run: |
           /usr/bin/python3 -c "import ast; ast.parse(open('lib/scheduler.py').read())"
-          echo "scheduler.py parses cleanly"
+          /usr/bin/python3 -c "import ast; ast.parse(open('lib/dag-runner.py').read())"
+          /usr/bin/python3 -c "import ast; ast.parse(open('lib/clauck').read())"
+          echo "All Python files parse cleanly"
 
       - name: Validate JSON
         run: |

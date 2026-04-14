@@ -17,6 +17,10 @@ When the user asks something in this list, follow the playbook — don't improvi
 | "What can I add?" / "Show me the library" | Read `~/.claude/skills/scheduled-jobs/library/index.json`. Present jobs as a compact list: `<name> (<category>) — <one_line>. Costs ~$X/mo. Requires: <mcps>`. If user mentions a category/tag, filter first. |
 | "Install [library job]" | See **Installing from the library** below. Copy the `.md`, walk the user through any `CUSTOMIZE BEFORE INSTALLING` blocks, then ad-hoc fire to verify. |
 | "Add a new scheduled job for …" | See **Designing a new job** below. Elicit cron/trigger, budget, destination, then write the `.md`, ad-hoc fire, confirm. |
+| "Make this job depend on / use output from [other job]" | Add `producers: [{name: other-job}]` to frontmatter. Check manifest for cycle errors within 60s. See **Pipelines** below. |
+| "When this job runs, also trigger [other job]" | Add `consumers: [other-job]` to frontmatter. Consumer fires after each run with the producer's output injected. |
+| "Build a pipeline that does A then B then C" | Create 3 jobs. B has `producers: [{name: A}]`, C has `producers: [{name: B}]`. Fire A → automatic cascade. See **Pipelines**. |
+| "Fix this" / "Something's broken" / "Debug my job" | Run `clauck doctor` or invoke the `clauck-work` meta job. See **Self-healing**. |
 | "Pause / resume job X" | Edit frontmatter: set `disabled: true` (pause) or remove (resume). Effective within 60s. |
 | "Change job X to run every N …" | Edit `cron:` field. Show them the new cron string and what it means in plain English. |
 | "Check for updates" / "Is there a new version?" | Run `~/.claude/scheduled-jobs/update-check.sh`. Report the result (up-to-date, or new version with release URL). |
@@ -280,6 +284,83 @@ When designing a job for the user, ask which pattern they want if the intent is 
 ### Discoverability
 
 If a job writes to a local file, tell the user exactly where it is after installation. When proactively suggesting a job, mention the output path as part of the pitch: *"I'd write a morning brief to `~/.claude/scheduled-jobs/morning-brief-feed.md` — want me to set it up?"*
+
+## Pipelines (producers and consumers)
+
+Jobs can be wired into DAGs where one job's output feeds into another job's input.
+
+### Producers (pull — "I need this before I can run")
+
+```yaml
+producers:
+  - {name: job-b}
+  - {name: job-c, timeout_seconds: 300}
+```
+
+When a job with producers triggers (cron, event, or ad-hoc), the scheduler delegates to `dag-runner.py` which:
+1. Resolves the full dependency tree recursively
+2. Finds roots (jobs with no producers) and runs them in parallel
+3. As each layer completes, injects outputs into the next layer
+4. Each node receives a `## Producer outputs` section in its runtime context with the results from its producers
+5. Each node also sees an **oplog** — the full execution chain showing what ran, when, and whether it succeeded
+
+### Consumers (push — "My output goes to these after I run")
+
+```yaml
+consumers:
+  - job-x
+  - job-y
+```
+
+After a job completes (regardless of how it was triggered), its output is delivered to each consumer and the consumer is fired. This is unconditional and non-blocking.
+
+### Cycle suppression
+
+When a producer completes inside an invocation tree and would deliver to its registered consumers, it skips any consumer that is already a member of the current invocation tree. This prevents ping-pong loops in double-linked jobs (A produces for B, B consumes from A).
+
+**When designing pipelines, ALWAYS check for cycles.** The scheduler detects them at manifest-write time (every 60s) and logs errors. But the best practice is to never create them. Before adding a producer or consumer link, trace the graph mentally: can you get from any job back to itself by following producer/consumer edges?
+
+### Designing a pipeline for the user
+
+When a user describes a multi-step workflow:
+
+1. **Identify the stages.** Each distinct data-transformation step is a job.
+2. **Wire producers.** Each stage lists its input stages as producers.
+3. **Keep stages focused.** One job = one transformation. Cheaper per-job budgets, better debuggability.
+4. **Set the root's trigger.** The root (final stage) has the cron or external trigger. Upstream jobs are ad-hoc-only (`cron: ""`).
+5. **Consumer links are for fan-out.** Use them when a job's output should trigger independent downstream work that isn't part of the linear pipeline.
+6. **Report total cost.** Sum all jobs' `max_budget_usd` in the pipeline. This is the theoretical max per trigger.
+
+Example — a 3-stage pipeline:
+
+```
+Job: sentry-pull (cron: "", producers: none)
+  → pulls last 24h of Sentry errors
+
+Job: pr-correlate (cron: "", producers: [{name: sentry-pull}])
+  → cross-references errors with merged PRs from last week
+
+Job: weekly-report (cron: "0 10 * * 1", producers: [{name: pr-correlate}])
+  → synthesizes correlation report, posts to Slack
+  → consumers: [team-channel-notify]
+```
+
+User says: *"Every Monday, pull Sentry errors, cross-reference with merged PRs, and post a correlation report."* You create these 3 jobs + the consumer. Total cost: ~$0.50/week.
+
+### Pipelines without scheduling
+
+Producer/consumer DAGs work independently of cron. A graph of ad-hoc-only jobs triggered by `clauck fire root-job` is a first-class use case. This makes clauck a general-purpose workflow engine, not just a scheduler.
+
+## Self-healing (clauck-work)
+
+The `clauck-work` meta job is a session-persistent diagnostic agent. It's invoked:
+- Automatically when a pipeline node fails (abort-on-fail behavior)
+- Via `clauck doctor` for manual diagnostics
+- Via `clauck doctor -i` for interactive diagnostic sessions
+
+It scores fixes on cost:value × confidence:impact before acting. High-confidence low-risk fixes are applied automatically. Uncertain or high-risk issues are surfaced to the user with options.
+
+Because it has `session_persist: true`, it accumulates knowledge about recurring issues across invocations — it gets better at diagnosing your specific installation over time.
 
 ## Architecture
 
