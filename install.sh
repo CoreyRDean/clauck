@@ -117,7 +117,8 @@ resolve_repo() {
     command -v git >/dev/null 2>&1 || die "git not found — install Xcode Command Line Tools (xcode-select --install)" 1
     local tmp
     tmp="$(mktemp -d /tmp/open-claude-cron.XXXXXX)"
-    say "Cloning $REPO_URL (branch $REPO_BRANCH) → $tmp"
+    # send to stderr — stdout is captured by the `repo="$(resolve_repo)"` caller.
+    say "Cloning $REPO_URL (branch $REPO_BRANCH) → $tmp" >&2
     git clone --depth 1 --branch "$REPO_BRANCH" "$REPO_URL" "$tmp/repo" >/dev/null 2>&1 \
         || die "failed to clone $REPO_URL" 1
     # Register cleanup
