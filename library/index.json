@@ -1,7 +1,60 @@
 {
-  "version": "v0.1.0",
+  "version": "v0.1.2",
   "description": "Curated pre-made scheduled-job prompts for open-claude-cron. Browse by category or tags; ask Claude to copy one into your scheduled-jobs directory to install.",
   "jobs": [
+    {
+      "name": "morning-brief",
+      "path": "productivity/morning-brief.md",
+      "category": "productivity",
+      "tags": ["digest", "daily", "slack", "calendar", "jira", "standup"],
+      "one_line": "Weekday morning digest: unread Slack mentions, today's calendar, and open Jira tickets in one post.",
+      "schedule": "weekdays at 13:00 UTC (configurable)",
+      "cost_per_run_usd_approx": 0.20,
+      "runs_per_month_approx": 22,
+      "monthly_cost_usd_approx": 4.40,
+      "requires": {
+        "mcps": "Slack + Google Calendar + Atlassian (any subset works; missing sections are skipped)",
+        "setup": [
+          "Set your Slack DM channel ID in the prompt.",
+          "Optionally narrow the Jira search to a specific project."
+        ]
+      }
+    },
+    {
+      "name": "github-pr-digest",
+      "path": "productivity/github-pr-digest.md",
+      "category": "productivity",
+      "tags": ["github", "pull-requests", "digest", "daily", "code-review"],
+      "one_line": "Weekday digest of PRs needing your attention: reviews requested, stale drafts, recently merged.",
+      "schedule": "weekdays at 14:00 UTC (configurable)",
+      "cost_per_run_usd_approx": 0.12,
+      "runs_per_month_approx": 22,
+      "monthly_cost_usd_approx": 2.64,
+      "requires": {
+        "mcps": "GitHub + Slack (or switch to local file)",
+        "setup": [
+          "Set your Slack DM channel ID in the prompt."
+        ]
+      }
+    },
+    {
+      "name": "inbox-zero-assist",
+      "path": "productivity/inbox-zero-assist.md",
+      "category": "productivity",
+      "tags": ["gmail", "email", "triage", "inbox-zero", "daily"],
+      "one_line": "End-of-day scan of Gmail threads unread for 48h+. Suggests actions in a local file. Never sends.",
+      "schedule": "weekdays at 22:00 UTC (configurable)",
+      "cost_per_run_usd_approx": 0.12,
+      "runs_per_month_approx": 22,
+      "monthly_cost_usd_approx": 2.64,
+      "requires": {
+        "mcps": "Gmail",
+        "setup": [
+          "Optionally adjust cron time to match your end of workday.",
+          "Optionally narrow to specific Gmail labels."
+        ]
+      }
+    },
     {
       "name": "daily-verify",
       "path": "verification/daily-verify.md",
@@ -13,10 +66,9 @@
       "runs_per_month_approx": 30,
       "monthly_cost_usd_approx": 6.00,
       "requires": {
-        "mcps": "at least one of: Slack, Discord, Jira, Gmail (OR none if you use local-file mode)",
+        "mcps": "at least one of: Slack, Discord, Jira, Gmail (OR none in local-file mode)",
         "setup": [
-          "Edit the prompt body to pick ONE destination (marked in the template comment).",
-          "Fill in channel ID / ticket key / recipient for your chosen destination."
+          "Pick ONE destination and fill in channel ID / ticket key / recipient."
         ]
       }
     },
@@ -25,16 +77,45 @@
       "path": "organization/downloads-triage.md",
       "category": "organization",
       "tags": ["file-watcher", "downloads", "triage", "external-trigger"],
-      "one_line": "Fires when new files land in ~/Downloads (60s quiet period). Categorizes and suggests destinations; logs to a feed file.",
-      "schedule": "event-driven (file_added external trigger); debounced to at most once per 5 minutes",
+      "one_line": "Fires when new files land in ~/Downloads. Categorizes and suggests destinations.",
+      "schedule": "event-driven (file_added trigger, 60s quiet period, 5min debounce)",
       "cost_per_run_usd_approx": 0.04,
-      "runs_per_month_approx": "varies with download activity",
+      "runs_per_month_approx": "varies",
       "monthly_cost_usd_approx": "typically <$1",
       "requires": {
         "mcps": "none",
+        "setup": []
+      }
+    },
+    {
+      "name": "workspace-cleanup",
+      "path": "organization/workspace-cleanup.md",
+      "category": "organization",
+      "tags": ["desktop", "files", "cleanup", "stale", "weekly"],
+      "one_line": "Weekly scan of Desktop and Documents for stale files, generic names, and large files. Report only.",
+      "schedule": "Sundays at 17:00 UTC",
+      "cost_per_run_usd_approx": 0.04,
+      "runs_per_month_approx": 4,
+      "monthly_cost_usd_approx": 0.16,
+      "requires": {
+        "mcps": "none",
+        "setup": []
+      }
+    },
+    {
+      "name": "git-commit-nudge",
+      "path": "monitoring/git-commit-nudge.md",
+      "category": "monitoring",
+      "tags": ["git", "uncommitted", "unpushed", "nudge", "developer"],
+      "one_line": "Every 4 hours, check repos for uncommitted changes or unpushed commits. Nudge via local file.",
+      "schedule": "every 4 hours",
+      "cost_per_run_usd_approx": 0.04,
+      "runs_per_month_approx": 180,
+      "monthly_cost_usd_approx": 7.20,
+      "requires": {
+        "mcps": "none",
         "setup": [
-          "Optional: change the watched path or quiet_seconds window.",
-          "Optional: point the feed file somewhere other than the default."
+          "Change REPOS_ROOT in the prompt body to your git repos parent directory."
         ]
       }
     }

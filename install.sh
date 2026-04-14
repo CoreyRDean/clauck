@@ -117,7 +117,12 @@ resolve_repo() {
         return 0
     fi
     # Piped install → clone into a temp dir.
-    command -v git >/dev/null 2>&1 || { fail "git not found — install Xcode Command Line Tools (xcode-select --install)" >&2; return 1; }
+    if ! command -v git >/dev/null 2>&1; then
+        fail "git not found. Install Xcode Command Line Tools:" >&2
+        fail "  xcode-select --install" >&2
+        fail "Then re-run this installer." >&2
+        return 1
+    fi
     local tmp
     tmp="$(mktemp -d /tmp/open-claude-cron.XXXXXX)"
     say "Cloning $REPO_URL (branch $REPO_BRANCH) → $tmp" >&2

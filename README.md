@@ -68,6 +68,25 @@ curl -sSL https://raw.githubusercontent.com/CoreyRDean/open-claude-cron/main/ins
 curl -sSL https://raw.githubusercontent.com/CoreyRDean/open-claude-cron/main/install.sh | bash -s -- --yes
 ```
 
+**Or just tell Claude** — paste this into any Claude Code session:
+
+> Install open-claude-cron from github.com/CoreyRDean/open-claude-cron. Read the repo's CLAUDE.md for instructions, then run the installer and help me pick jobs from the library.
+
+Claude will fetch the repo's CLAUDE.md, follow the install instructions, and walk you through the library.
+
+### Prerequisites
+
+The installer checks for these and tells you exactly what's missing:
+
+| Dependency | Ships with macOS? | If missing |
+|---|---|---|
+| `/bin/zsh` | Yes | Always present on macOS |
+| `/usr/bin/python3` | Yes (since macOS 12) | Always present on modern macOS |
+| `git` | Yes (via Xcode CLT) | `xcode-select --install` |
+| **`claude` CLI** | **No** | **[Install Claude Code](https://claude.ai/code)** — the only manual step |
+
+`claude` is the only dependency you need to install yourself. Everything else is bundled with macOS.
+
 ### Install from your own fork
 
 Fork the repo, then install with your fork as the source and update channel:
@@ -111,17 +130,21 @@ The scheduler discovers it within 60 seconds. No reload, no restart.
 
 ### Browse the library
 
-Ask Claude:
+Ask Claude: *"What open-claude-cron jobs are in the library?"*
 
-> "What open-claude-cron jobs are in the library?"
+Ships with 7 curated jobs across 4 categories:
 
-Or inspect directly:
+| Job | What it does | Schedule | Cost/mo |
+|---|---|---|---|
+| **morning-brief** | Slack mentions + calendar + Jira tickets in one digest | Weekdays 8am | ~$4 |
+| **github-pr-digest** | PRs needing review, stale drafts, recently merged | Weekdays 9am | ~$3 |
+| **inbox-zero-assist** | Gmail threads unread 48h+ with suggested actions | Weekdays 5pm | ~$3 |
+| **daily-verify** | MCP-surface health check (catch silent auth drift) | Daily | ~$6 |
+| **downloads-triage** | Categorize new files in ~/Downloads | Event-driven | <$1 |
+| **workspace-cleanup** | Find stale/generic/large files on Desktop | Weekly | ~$0.16 |
+| **git-commit-nudge** | Uncommitted changes and unpushed commits across repos | Every 4h | ~$7 |
 
-```bash
-cat ~/.claude/skills/scheduled-jobs/library/index.json | python3 -m json.tool
-```
-
-Library jobs are curated, cost-documented, and come with setup instructions that Claude walks you through on install.
+All library jobs are report-only by default — they read and summarize, they don't send, delete, or modify.
 
 ## External triggers
 
