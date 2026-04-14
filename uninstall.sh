@@ -37,7 +37,7 @@ else
     warn "plist not found (already removed?): $PLIST"
 fi
 
-say "Removing runtime scripts, skill, and library"
+say "Removing runtime scripts, skill, and marketplace"
 FILES=(
     "$HOME/.claude/scheduled-jobs/scheduler.py"
     "$HOME/.claude/scheduled-jobs/run-job.sh"
@@ -56,10 +56,10 @@ for f in "${FILES[@]}"; do
         ok "removed: $f"
     fi
 done
-# Library dir (cached copy of the curated job catalog).
-if [ -d "$HOME/.claude/skills/scheduled-jobs/library" ]; then
-    rm -rf "$HOME/.claude/skills/scheduled-jobs/library"
-    ok "removed: ~/.claude/skills/scheduled-jobs/library"
+# Marketplace dir (cached copy of the curated job catalog).
+if [ -d "$HOME/.claude/skills/scheduled-jobs/marketplace" ]; then
+    rm -rf "$HOME/.claude/skills/scheduled-jobs/marketplace"
+    ok "removed: ~/.claude/skills/scheduled-jobs/marketplace"
 fi
 # Try to clean the skill dir if empty
 [ -d "$HOME/.claude/skills/scheduled-jobs" ] \

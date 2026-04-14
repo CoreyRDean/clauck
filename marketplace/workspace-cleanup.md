@@ -9,6 +9,13 @@ effort: low
 model: haiku
 setting_sources: ""
 strict_mcp_config: true
+tags:
+  - organization
+  - desktop
+  - files
+  - cleanup
+  - stale
+  - weekly
 semantic_hooks:
   - Want to clean up stale files on my Desktop or Documents
   - Need to find old screenshots or unnamed files cluttering my workspace

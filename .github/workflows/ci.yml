@@ -30,8 +30,8 @@ jobs:
 
       - name: Validate JSON
         run: |
-          /usr/bin/python3 -c "import json; json.load(open('library/index.json'))"
-          echo "library/index.json valid"
+          /usr/bin/python3 -c "import json; json.load(open('marketplace/index.json'))"
+          echo "marketplace/index.json valid"
 
       - name: Check for secrets
         run: |

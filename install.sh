@@ -254,13 +254,13 @@ CFGEOF
     section "Installing skill"
     install_file "$repo/skill/scheduled-jobs/SKILL.md" "$HOME/.claude/skills/scheduled-jobs/SKILL.md" 644
 
-    # Ship the library (pre-made job catalog) into the skill dir so agents can
-    # browse it offline. Always overwrite — library updates are expected.
-    if [ -d "$repo/library" ]; then
-        local lib_dst="$HOME/.claude/skills/scheduled-jobs/library"
-        rm -rf "$lib_dst"
-        cp -R "$repo/library" "$lib_dst"
-        ok "installed library → $lib_dst ($(ls "$lib_dst/"*/*.md 2>/dev/null | wc -l | tr -d ' ') job(s))"
+    # Ship the marketplace (pre-made job catalog) into the skill dir so agents can
+    # browse it offline. Always overwrite — marketplace updates are expected.
+    if [ -d "$repo/marketplace" ]; then
+        local mkt_dst="$HOME/.claude/skills/scheduled-jobs/marketplace"
+        rm -rf "$mkt_dst"
+        cp -R "$repo/marketplace" "$mkt_dst"
+        ok "installed marketplace → $mkt_dst ($(ls "$mkt_dst/"*.md 2>/dev/null | wc -l | tr -d ' ') job(s))"
     fi
 
     section "Installing default jobs"
@@ -429,7 +429,7 @@ ${C_BOLD}═══════════════════════�
   Scheduler       com.$USER.claude-scheduler (loaded, tick interval 60s)
   Jobs directory  ~/.claude/scheduled-jobs/
   Skill           ~/.claude/skills/scheduled-jobs/SKILL.md
-  Library         ~/.claude/skills/scheduled-jobs/library/
+  Marketplace     ~/.claude/skills/scheduled-jobs/marketplace/
   Hook            ~/.claude/hooks/scheduled-jobs-notice.sh
   Config          ~/.claude/scheduled-jobs/.clauck.config.json
 
@@ -449,14 +449,14 @@ ${C_BOLD}What just happened:${C_RESET}
 ${C_BOLD}Next steps:${C_RESET}
   1. Open Claude Code in any terminal. A SessionStart hook will advertise
      this system and the library to your agent.
-  2. Ask your session: ${C_BOLD}"What clauck jobs can I add from the library?"${C_RESET}
-     The agent will read ~/.claude/skills/scheduled-jobs/library/index.json
+  2. Ask your session: ${C_BOLD}"What clauck jobs can I add from the marketplace?"${C_RESET}
+     The agent will read ~/.claude/skills/scheduled-jobs/marketplace/index.json
      and install any you pick.
   3. Or just ask: ${C_BOLD}"What can I schedule?"${C_RESET} — the agent will design a
      new job with you from scratch.
   4. To inspect manually:
        cat ~/.claude/scheduled-jobs/.manifest.json | python3 -m json.tool
-       ls ~/.claude/scheduled-jobs/  ~/.claude/skills/scheduled-jobs/library/
+       ls ~/.claude/scheduled-jobs/  ~/.claude/skills/scheduled-jobs/marketplace/
   5. To uninstall:
        bash <(curl -sSL $REPO_URL/raw/$REPO_BRANCH/uninstall.sh)
 
@@ -505,7 +505,7 @@ ${C_BOLD}This installer will:${C_RESET}
   ${C_DIM}core${C_RESET}  Place scheduler + executor scripts in ~/.claude/scheduled-jobs/
   ${C_DIM}core${C_RESET}  Register a LaunchAgent (com.$USER.claude-scheduler, ticks every 60s)
   ${C_DIM}opt ${C_RESET}  Install a Claude Code skill at ~/.claude/skills/scheduled-jobs/
-  ${C_DIM}opt ${C_RESET}  Install a pre-made job library at ~/.claude/skills/scheduled-jobs/library/
+  ${C_DIM}opt ${C_RESET}  Install a pre-made job marketplace at ~/.claude/skills/scheduled-jobs/marketplace/
   ${C_DIM}opt ${C_RESET}  Register a SessionStart hook in ~/.claude/settings.json
   ${C_DIM}opt ${C_RESET}  Install the 'heartbeat' job (~\$1/month on Haiku)
 

@@ -8,6 +8,13 @@ cwd: ~
 effort: low
 model: haiku
 setting_sources: ""
+tags:
+  - productivity
+  - github
+  - pull-requests
+  - digest
+  - daily
+  - code-review
 semantic_hooks:
   - Want a summary of GitHub PRs that need my attention
   - Need to check for stale PRs or pending review requests

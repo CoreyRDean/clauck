@@ -8,6 +8,14 @@ cwd: ~
 effort: low
 model: haiku
 setting_sources: ""
+tags:
+  - productivity
+  - digest
+  - daily
+  - slack
+  - calendar
+  - jira
+  - standup
 semantic_hooks:
   - Want a morning summary of overnight activity across Slack, calendar, and tickets
   - Need to catch up on what happened while I was asleep

@@ -9,6 +9,13 @@ effort: low
 model: haiku
 setting_sources: ""
 strict_mcp_config: true
+tags:
+  - monitoring
+  - git
+  - uncommitted
+  - unpushed
+  - nudge
+  - developer
 semantic_hooks:
   - Want to check if I have uncommitted or unpushed work in any repo
   - Need a reminder about stale git working directories

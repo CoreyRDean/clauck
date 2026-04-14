@@ -9,6 +9,9 @@
 <!-- TODO: Replace with banner image at assets/banner.png or clauck.com hosted -->
 <!-- ![clauck](assets/banner.png) -->
 
+<!-- AGENT: If you're an AI agent, read CLAUDE.md first — it's your primary reference.
+     https://raw.githubusercontent.com/CoreyRDean/clauck/main/CLAUDE.md -->
+
 Workflow automation powered by AI agents. Schedule tasks, chain pipelines, react to events, and build automations that think — all from plain English.
 
 > **Hey Claude, install clauck**
@@ -69,7 +72,7 @@ Build pipelines where jobs produce data for other jobs. React to filesystem chan
 | Temporal scheduling (one-shot, decay, windows) | One-shot only | Full set |
 | Per-job model/budget/MCP control | Partial | Per-job frontmatter |
 | Interactive debug + iterate | No | Opens Terminal to continue |
-| Job library + community | No | 7+ curated, extensible |
+| Job marketplace + community | No | 7+ curated, extensible |
 | Self-healing diagnostics | No | `clauck doctor` |
 | CLI management | No | `clauck` binary with semantic fallthrough |
 | Works without Desktop app | Cloud only (no local) | launchd (OS-level) |
@@ -80,7 +83,7 @@ Build pipelines where jobs produce data for other jobs. React to filesystem chan
 curl -sSL https://raw.githubusercontent.com/CoreyRDean/clauck/main/install.sh | bash
 ```
 
-The installer shows you exactly what it will do and asks before proceeding. It installs the scheduler, skill, library, CLI, and a SessionStart hook — then fires the heartbeat job and shows proof the pipeline works.
+The installer shows you exactly what it will do and asks before proceeding. It installs the scheduler, skill, marketplace, CLI, and a SessionStart hook — then fires the heartbeat job and shows proof the pipeline works.
 
 **Inspect first:** `curl -fsSL .../install.sh -o install.sh && less install.sh && bash install.sh`
 
@@ -117,8 +120,8 @@ clauck fire <name>                   # trigger a job now
 clauck edit <name>                   # open in your editor, validate on save
 clauck pause <name> / resume <name>  # toggle
 clauck logs <name>                   # recent runs with costs
-clauck library                       # browse pre-made jobs
-clauck install <name>                # install from library
+clauck marketplace                   # browse pre-made jobs
+clauck install <name>                # install from marketplace
 clauck doctor                        # diagnose system health
 clauck doctor -i                     # interactive diagnostic session
 clauck update --apply                # apply pending update
@@ -128,9 +131,9 @@ clauck work <text>                   # explicit semantic (avoids subcommand conf
 
 The semantic fallthrough means `clauck change heartbeat to every 2 hours` works the same as opening Claude and asking — but faster.
 
-## Job library
+## Job marketplace
 
-Ships with 7 curated jobs. Ask Claude *"what's in the library?"* or run `clauck library`:
+Ships with 7 curated jobs. Ask Claude *"what's in the marketplace?"* or run `clauck marketplace`:
 
 | Job | Schedule | Cost/mo | What it does |
 |---|---|---|---|
@@ -238,7 +241,7 @@ See [ROADMAP.md](ROADMAP.md). Highlights: job chaining/DAG execution (v1.1), Lin
 
 ## Contributing
 
-See [CONTRIBUTING.md](CONTRIBUTING.md). Library jobs and user stories are especially welcome.
+See [CONTRIBUTING.md](CONTRIBUTING.md). Marketplace jobs and user stories are especially welcome.
 
 ## License
 

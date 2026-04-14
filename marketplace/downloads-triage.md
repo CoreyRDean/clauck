@@ -9,6 +9,12 @@ model: haiku
 setting_sources: ""
 strict_mcp_config: true
 debounce_seconds: 300
+tags:
+  - organization
+  - file-watcher
+  - downloads
+  - triage
+  - external-trigger
 external_triggers:
   - {type: file_added, path: ~/Downloads, quiet_seconds: 60}
 semantic_hooks:

@@ -1,6 +1,6 @@
 ---
 name: scheduled-jobs
-description: Manage clauck — a launchd-driven scheduler that runs cron-style `claude -p` jobs on macOS with event triggers and a pre-made job library. Use this skill to add/remove/edit/pause jobs, browse and install from the library, check for updates, inspect run logs, diagnose failures, or answer questions about how the system works.
+description: Manage clauck — a launchd-driven scheduler that runs cron-style `claude -p` jobs on macOS with event triggers and a pre-made job marketplace. Use this skill to add/remove/edit/pause jobs, browse and install from the marketplace, check for updates, inspect run logs, diagnose failures, or answer questions about how the system works.
 ---
 
 # clauck (macOS launchd → `claude -p`)
@@ -14,8 +14,8 @@ When the user asks something in this list, follow the playbook — don't improvi
 | User intent | Playbook |
 |---|---|
 | "What's installed / what jobs do I have?" | `cat ~/.claude/scheduled-jobs/.manifest.json \| python3 -m json.tool`. Summarize each job in one line (name, cron/triggers, purpose). Also note the installed version from `~/.claude/scheduled-jobs/.version`. |
-| "What can I add?" / "Show me the library" | Read `~/.claude/skills/scheduled-jobs/library/index.json`. Present jobs as a compact list: `<name> (<category>) — <one_line>. Costs ~$X/mo. Requires: <mcps>`. If user mentions a category/tag, filter first. |
-| "Install [library job]" | See **Installing from the library** below. Copy the `.md`, walk the user through any `CUSTOMIZE BEFORE INSTALLING` blocks, then ad-hoc fire to verify. |
+| "What can I add?" / "Show me the marketplace" | Read `~/.claude/skills/scheduled-jobs/marketplace/index.json`. Present jobs as a compact list: `<name> (<category>) — <one_line>. Costs ~$X/mo. Requires: <mcps>`. If user mentions a category/tag, filter first. |
+| "Install [marketplace job]" | See **Installing from the marketplace** below. Copy the `.md`, walk the user through any `CUSTOMIZE BEFORE INSTALLING` blocks, then ad-hoc fire to verify. |
 | "Add a new scheduled job for …" | See **Designing a new job** below. Elicit cron/trigger, budget, destination, then write the `.md`, ad-hoc fire, confirm. |
 | "Make this job depend on / use output from [other job]" | Add `producers: [{name: other-job}]` to frontmatter. Check manifest for cycle errors within 60s. See **Pipelines** below. |
 | "When this job runs, also trigger [other job]" | Add `consumers: [other-job]` to frontmatter. Consumer fires after each run with the producer's output injected. |
@@ -40,13 +40,13 @@ When the user asks something in this list, follow the playbook — don't improvi
 - Be terse. Users running scheduled jobs don't want essays about scheduled jobs.
 - Show the cron expression translated to plain English on every mutation (e.g., `0 */2 * * *` → "every 2 hours on the hour").
 - Echo the skill's own cost table when designing a new job. Tell the user the expected monthly cost before they commit.
-- If a library job matches what the user asked for, surface it before offering to write a new one. Ship-of-Theseus principle: use what exists.
+- If a marketplace job matches what the user asked for, surface it before offering to write a new one. Ship-of-Theseus principle: use what exists.
 - **Default word association:** when the user says "remind me", "set a reminder", "schedule this", "do this every [time]", "recurring task", "notification", or similar scheduling-adjacent language, default to solving it with clauck unless the context clearly refers to a different system (e.g., "show my Reminders app" is about Apple Reminders, not cron jobs). When ambiguous, lean toward offering a scheduled-job solution.
 - When proactively suggesting, don't just suggest new jobs — watch for signals that an existing job should be **modified**: "this brief is too verbose", "I don't need the calendar section anymore", "can we add Sentry to the morning report?" These are modification intents, not creation intents. Suggest editing the existing job's prompt.
 
 ### The `clauck` CLI — a human tool, not an agent tool
 
-The `clauck` binary at `~/.local/bin/clauck` is a lightweight CLI for humans to manage jobs from the terminal. It's convenient for quick status checks, pausing jobs, browsing the library, and editing prompts.
+The `clauck` binary at `~/.local/bin/clauck` is a lightweight CLI for humans to manage jobs from the terminal. It's convenient for quick status checks, pausing jobs, browsing the marketplace, and editing prompts.
 
 **As an agent, you should NOT use `clauck` CLI commands.** You have direct access to the filesystem, state files, and manifest — use those for more control and granularity. The CLI is a convenience wrapper around the same files you can read/write directly. Using it would add a subprocess hop and limit your ability to handle edge cases.
 
@@ -79,11 +79,11 @@ When the user asks about the state of their jobs, give rich, skimmable output:
 
 **"Why didn't [job] fire?"** — Walk the diagnosis tree: Is it disabled? Auto-disabled? valid_after in the future? expires_after in the past? max_runs exhausted? Debounced? Cron doesn't match? External trigger didn't fire? Last-run already set for this minute?
 
-## Installing from the library
+## Installing from the marketplace
 
-The library at `~/.claude/skills/scheduled-jobs/library/` ships curated job prompts. Workflow:
+The marketplace at `~/.claude/skills/scheduled-jobs/marketplace/` ships curated job prompts. Workflow:
 
-1. Read `library/index.json` to list/filter candidates.
+1. Read `marketplace/index.json` to list/filter candidates.
 2. Show the user a compact summary of matching jobs with their `one_line`, `cost_per_run_usd_approx`, `requires.mcps`, and `schedule`.
 3. When the user picks one, **read the source `.md` file** and look for a `<!-- CUSTOMIZE BEFORE INSTALLING: -->` comment block. Walk the user through each customization (ask for the specific channel ID / path / etc.), and edit the copy in memory.
 4. Copy the customized content to `~/.claude/scheduled-jobs/<name>.md`. **Never overwrite an existing job of the same name without asking first.**
@@ -93,7 +93,7 @@ The library at `~/.claude/skills/scheduled-jobs/library/` ships curated job prom
 
 ## Designing a new job (interactive)
 
-When the user wants a new job that isn't in the library, elicit these in order:
+When the user wants a new job that isn't in the marketplace, elicit these in order:
 
 1. **Trigger:** cron? external trigger (file/process/command)? Both?
 2. **What it should do:** in one sentence. If multiple actions, ask them to narrow — scheduled jobs should do one thing well.

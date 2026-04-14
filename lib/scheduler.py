@@ -271,6 +271,9 @@ def discover_jobs() -> list[dict]:
                 # each tick. See eval_* functions for supported types.
                 "external_triggers": list(fm.get("external_triggers", []) or []),
                 "semantic_hooks": list(fm.get("semantic_hooks", []) or []),
+                # tags: freeform string list for categorization, filtering, and
+                # marketplace search. Not used by the scheduler itself.
+                "tags": list(fm.get("tags", []) or []),
                 # --- pipeline ---
                 "producers": list(fm.get("producers", []) or []),
                 "consumers": list(fm.get("consumers", []) or []),
@@ -586,6 +589,7 @@ def write_manifest(jobs: list[dict]) -> None:
                 "cron": j["cron"],
                 "disabled": bool(j.get("disabled", False)),
                 "semantic_hooks": j["semantic_hooks"],
+                "tags": j.get("tags", []),
                 "external_triggers": j.get("external_triggers", []),
                 "producers": j.get("producers", []),
                 "consumers": j.get("consumers", []),

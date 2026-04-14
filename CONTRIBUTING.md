@@ -1,12 +1,12 @@
 # Contributing to clauck
 
-Thanks for considering contributing. This project is young and benefits from improvements to the scheduler, new library jobs, documentation, and bug reports.
+Thanks for considering contributing. This project is young and benefits from improvements to the scheduler, new marketplace jobs, documentation, and bug reports.
 
 ## Quick links
 
 - [Open an issue](https://github.com/CoreyRDean/clauck/issues/new/choose) for bugs, feature requests, or questions.
 - [SECURITY.md](SECURITY.md) for reporting vulnerabilities.
-- [Library contribution guide](#adding-a-job-to-the-library) below for submitting pre-made jobs.
+- [Marketplace contribution guide](#adding-a-job-to-the-marketplace) below for submitting pre-made jobs.
 
 ## Development setup
 
@@ -26,7 +26,7 @@ The installer uses the local `lib/`, `jobs/`, and `skill/` directories when it d
   feat: add file_changed external trigger type
   fix: prevent rotation count inflation when NULL_GLOB is set
   docs: add cost reality table to SKILL.md
-  chore: update library index with new job
+  chore: update marketplace index with new job
   ```
 - Keep commits atomic — one logical change per commit.
 
@@ -51,38 +51,38 @@ The installer uses the local `lib/`, `jobs/`, and `skill/` directories when it d
 - [ ] CHANGELOG.md updated under `[Unreleased]` if user-facing
 - [ ] No secrets, API keys, or personal paths committed
 
-## Adding a job to the library
+## Adding a job to the marketplace
 
-The library lives at `library/` in the repo. When users install or update clauck, the library is cached locally at `~/.claude/skills/scheduled-jobs/library/` so Claude can browse and install jobs offline.
+The marketplace lives at `marketplace/` in the repo. When users install or update clauck, the marketplace is cached locally at `~/.claude/skills/scheduled-jobs/marketplace/` so Claude can browse and install jobs offline.
 
-### Requirements for library jobs
+### Requirements for marketplace jobs
 
-1. **Self-contained.** A library job is a single `.md` file with standard YAML frontmatter. No external dependencies beyond the MCPs it declares.
+1. **Self-contained.** A marketplace job is a single `.md` file with standard YAML frontmatter. No external dependencies beyond the MCPs it declares.
 2. **Customization-friendly.** Include a `<!-- CUSTOMIZE BEFORE INSTALLING: -->` HTML comment block in the prompt body listing what the user must edit (channel IDs, paths, ticket keys, etc.). The Claude skill walks users through these during install.
-3. **Cost-documented.** Include realistic `max_budget_usd` and `model` values. Users trust the library when costs are transparent.
+3. **Cost-documented.** Include realistic `max_budget_usd` and `model` values. Users trust the marketplace when costs are transparent.
 4. **Tested.** Ad-hoc fire your job (`trigger-job.sh <name>`) and confirm it completes with `exit_code=0` before submitting.
 5. **Idempotent.** Jobs run repeatedly. The prompt should tell the LLM how to detect and skip already-completed work.
 
-### Steps to contribute a library job
+### Steps to contribute a marketplace job
 
-1. Choose or create a category directory under `library/`. Current categories:
+1. Choose a category for your job. Current categories (used as tags):
 
-   | Category | Purpose |
+   | Category tag | Purpose |
    |---|---|
-   | `verification/` | Pipeline health checks, MCP drift detection |
-   | `organization/` | File management, inbox triage, cleanup |
-   | `productivity/` | Digests, summaries, reminders |
-   | `monitoring/` | Service health, error alerting |
+   | `verification` | Pipeline health checks, MCP drift detection |
+   | `organization` | File management, inbox triage, cleanup |
+   | `productivity` | Digests, summaries, reminders |
+   | `monitoring` | Service health, error alerting |
 
-   New categories are welcome if existing ones don't fit.
+   New categories are welcome if existing ones don't fit. Categories are expressed as the first entry in the `tags` array.
 
-2. Create `library/<category>/<name>.md` with standard frontmatter. Use an existing library job as a template.
+2. Create `marketplace/<name>.md` with standard frontmatter. Use an existing marketplace job as a template.
 
-3. Add an entry to `library/index.json`:
+3. Add an entry to `marketplace/index.json`:
    ```json
    {
      "name": "<name>",
-     "path": "<category>/<name>.md",
+     "path": "<name>.md",
      "category": "<category>",
      "tags": ["<tag1>", "<tag2>"],
      "one_line": "<single sentence: what it does, when it fires>",
@@ -99,7 +99,7 @@ The library lives at `library/` in the repo. When users install or update clauck
 
 4. Open a PR against `main` with the new job + index entry. The PR description should include the ad-hoc fire log showing `exit_code=0`.
 
-### What makes a great library job
+### What makes a great marketplace job
 
 - **Solves a real problem** that many Claude users have.
 - **Minimal cost** for maximum value — prefer Haiku + `setting_sources: ""` unless MCP access is genuinely needed.

@@ -8,6 +8,13 @@ cwd: ~
 effort: low
 model: haiku
 setting_sources: ""
+tags:
+  - productivity
+  - gmail
+  - email
+  - triage
+  - inbox-zero
+  - daily
 semantic_hooks:
   - Want help triaging my email inbox
   - Need to identify old unread emails I should deal with

@@ -9,8 +9,8 @@ Usage:
     clauck resume <name>                 Re-enable a paused job
     clauck edit <name>                   Open job prompt in your editor
     clauck logs <name> [--last N]        Show recent logs
-    clauck library                       Browse pre-made jobs
-    clauck install <library-job>         Install from library
+    clauck marketplace                    Browse pre-made jobs
+    clauck install <marketplace-job>     Install from marketplace
     clauck update [--apply]              Check for / apply updates
     clauck config [set <key> <value>]    Show or edit config
     clauck doctor [-i|--interactive]     Diagnose system health
@@ -42,12 +42,12 @@ VERSION_FILE = JOBS_DIR / ".version"
 CONFIG_FILE = JOBS_DIR / ".clauck.config.json"
 TRIGGER_SCRIPT = JOBS_DIR / "trigger-job.sh"
 UPDATE_SCRIPT = JOBS_DIR / "update-check.sh"
-LIBRARY_DIR = HOME / ".claude" / "skills" / "scheduled-jobs" / "library"
+MARKETPLACE_DIR = HOME / ".claude" / "skills" / "scheduled-jobs" / "marketplace"
 
 
 KNOWN_COMMANDS = {
     "list", "status", "fire", "pause", "resume", "edit", "logs",
-    "library", "install", "update", "config", "version", "doctor", "work",
+    "marketplace", "install", "update", "config", "version", "doctor", "work",
     "-h", "--help", "help",
 }
 
@@ -306,30 +306,59 @@ def cmd_logs(name: str, last: int = 5) -> None:
         print(f"  {ts:<30} {exit_line:<25} {cost}")
 
 
-def cmd_library() -> None:
-    index_file = LIBRARY_DIR / "index.json"
+def cmd_marketplace(filter_tag: str = "") -> None:
+    index_file = MARKETPLACE_DIR / "index.json"
     if not index_file.exists():
-        die("library not found — run the installer to populate it")
+        die("marketplace not found — run the installer to populate it")
     index = json.loads(index_file.read_text())
-    for j in index.get("jobs", []):
+    jobs = index.get("jobs", [])
+
+    if filter_tag:
+        ft = filter_tag.lower()
+        jobs = [j for j in jobs if ft in [t.lower() for t in j.get("tags", [])]]
+        if not jobs:
+            print(f"  no jobs matching tag: {filter_tag}")
+            # Show available tags
+            all_tags = set()
+            for j in index.get("jobs", []):
+                all_tags.update(j.get("tags", []))
+            print(f"  available tags: {', '.join(sorted(all_tags))}")
+            return
+
+    # Group by first tag (category) for display
+    seen_categories: set = set()
+    for j in jobs:
+        tags = j.get("tags", [])
+        category = tags[0] if tags else "uncategorized"
+        if category not in seen_categories:
+            seen_categories.add(category)
+            print(f"\n  [{category}]")
         installed = (JOBS_DIR / f"{j['name']}.md").exists()
         marker = " [installed]" if installed else ""
-        print(f"  {j['name']:<25} {j.get('schedule', ''):<35} ~${j.get('cost_per_run_usd_approx', '?')}/run{marker}")
-        print(f"    {j.get('one_line', '')}")
+        cost = j.get("cost_per_run_usd_approx", "?")
+        print(f"    {j['name']:<23} ~${cost}/run  {j.get('schedule', '')}{marker}")
+        print(f"      {j.get('one_line', '')}")
+
+    # Show all tags
+    all_tags = set()
+    for j in index.get("jobs", []):
+        all_tags.update(j.get("tags", []))
+    print(f"\n  filter by tag: clauck marketplace <tag>")
+    print(f"  tags: {', '.join(sorted(all_tags))}")
 
 
-def cmd_install_library(name: str) -> None:
-    index_file = LIBRARY_DIR / "index.json"
+def cmd_install_marketplace(name: str) -> None:
+    index_file = MARKETPLACE_DIR / "index.json"
     if not index_file.exists():
-        die("library not found")
+        die("marketplace not found")
     index = json.loads(index_file.read_text())
     match = [j for j in index.get("jobs", []) if j["name"] == name]
     if not match:
-        die(f"no library job named '{name}'. Run `clauck library` to see available jobs.")
+        die(f"no marketplace job named '{name}'. Run `clauck marketplace` to see available jobs.")
     job = match[0]
-    src = LIBRARY_DIR / job["path"]
+    src = MARKETPLACE_DIR / job["path"]
     if not src.exists():
-        die(f"library file missing: {src}")
+        die(f"marketplace file missing: {src}")
     dst = JOBS_DIR / f"{name}.md"
     if dst.exists():
         die(f"job already exists: {dst}. Remove it first or edit directly.")
@@ -485,7 +514,7 @@ outside this domain. Available operations:
 - Create, edit, pause, resume, remove scheduled jobs at {JOBS_DIR}/
 - Read the manifest at {MANIFEST}
 - Read/write state at {STATE_DIR}/
-- Read the library at {LIBRARY_DIR}/
+- Read the marketplace at {MARKETPLACE_DIR}/
 - Read/write config at {CONFIG_FILE}
 - Fire jobs via {TRIGGER_SCRIPT}
 - Read logs at {JOBS_DIR}/<name>-*.log
@@ -548,10 +577,10 @@ def main() -> None:
                 last = int(rest[idx + 1])
             rest = [r for i, r in enumerate(rest) if i != idx and i != idx + 1]
         cmd_logs(rest[0], last)
-    elif cmd == "library":
-        cmd_library()
+    elif cmd == "marketplace":
+        cmd_marketplace(filter_tag=rest[0] if rest else "")
     elif cmd == "install" and rest:
-        cmd_install_library(rest[0])
+        cmd_install_marketplace(rest[0])
     elif cmd == "update":
         cmd_update(apply="--apply" in rest)
     elif cmd == "config":

@@ -8,6 +8,12 @@ cwd: ~
 effort: low
 model: haiku
 setting_sources: ""
+tags:
+  - verification
+  - health-check
+  - daily
+  - mcp
+  - notification
 semantic_hooks:
   - Need to verify MCP servers are loading correctly under launchd-driven claude sessions
   - Suspect silent MCP auth drift (OAuth tokens expired, claude.ai integration glitched)
