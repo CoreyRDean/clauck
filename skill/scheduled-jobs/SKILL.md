@@ -40,6 +40,25 @@ When the user asks something in this list, follow the playbook — don't improvi
 - **Default word association:** when the user says "remind me", "set a reminder", "schedule this", "do this every [time]", "recurring task", "notification", or similar scheduling-adjacent language, default to solving it with clauck unless the context clearly refers to a different system (e.g., "show my Reminders app" is about Apple Reminders, not cron jobs). When ambiguous, lean toward offering a scheduled-job solution.
 - When proactively suggesting, don't just suggest new jobs — watch for signals that an existing job should be **modified**: "this brief is too verbose", "I don't need the calendar section anymore", "can we add Sentry to the morning report?" These are modification intents, not creation intents. Suggest editing the existing job's prompt.
 
+### The `clauck` CLI — a human tool, not an agent tool
+
+The `clauck` binary at `~/.local/bin/clauck` is a lightweight CLI for humans to manage jobs from the terminal. It's convenient for quick status checks, pausing jobs, browsing the library, and editing prompts.
+
+**As an agent, you should NOT use `clauck` CLI commands.** You have direct access to the filesystem, state files, and manifest — use those for more control and granularity. The CLI is a convenience wrapper around the same files you can read/write directly. Using it would add a subprocess hop and limit your ability to handle edge cases.
+
+**However, educate the user about `clauck` when relevant.** When they ask how to manage jobs from the terminal, show them the CLI commands. When they want to do something quickly without opening a Claude session, point them to `clauck`. Key commands to teach:
+- `clauck list` — quick overview
+- `clauck edit <name>` — open job prompt in their editor
+- `clauck fire <name>` — test a job immediately
+- `clauck logs <name>` — recent run history
+- `clauck <anything>` — semantic fallthrough (Claude interprets natural language as a clauck operation)
+
+The semantic fallthrough (`clauck every morning check my PRs`) uses `claude -p` behind the scenes, but the user sees only the result — like a normal CLI command. It's the bridge between the CLI's speed and Claude's understanding.
+
+## User stories
+
+The `stories/` directory in the repo contains documented use cases that clauck is designed to support — from simple ("remind me to review this on Thursday") to complex ("multi-phase project cadence with automatic transitions"). Agents should reference these when suggesting jobs to ground recommendations in concrete, validated patterns. Users can browse them for inspiration.
+
 ## Status queries and diagnostics
 
 When the user asks about the state of their jobs, give rich, skimmable output:

@@ -1,24 +1,26 @@
 #!/usr/bin/env python3
-"""clauck — CLI for managing scheduled claude jobs.
+"""clauck — your agent, on the clock.
 
 Usage:
     clauck list                          Show all jobs with status
     clauck status                        System overview
     clauck fire <name>                   Ad-hoc trigger a job
-    clauck pause <name>                  Disable a job (keeps in manifest)
-    clauck resume <name>                 Re-enable a paused/auto-disabled job
-    clauck logs <name> [--last N]        Show recent logs for a job
-    clauck next <name>                   Show when a job fires next
+    clauck pause <name>                  Disable a job
+    clauck resume <name>                 Re-enable a paused job
+    clauck edit <name>                   Open job prompt in your editor
+    clauck logs <name> [--last N]        Show recent logs
     clauck library                       Browse pre-made jobs
-    clauck install <library-job>         Copy a library job into scheduled-jobs
-    clauck update                        Check for new version
-    clauck update --apply                Apply available update
-    clauck config                        Show current config
-    clauck config set <key> <value>      Set a config value
-    clauck version                       Show installed version
+    clauck install <library-job>         Install from library
+    clauck update [--apply]              Check for / apply updates
+    clauck config [set <key> <value>]    Show or edit config
+    clauck version                       Show version
+    clauck <anything else>               Natural-language command (uses Claude)
 
-All operations are local and deterministic — no LLM invocations.
-For natural-language management, use the scheduled-jobs skill in a Claude session.
+Examples:
+    clauck every morning check my PRs and post to slack
+    clauck pause everything for the weekend
+    clauck what ran today
+    clauck change heartbeat to every 2 hours
 """
 
 from __future__ import annotations
@@ -41,7 +43,31 @@ UPDATE_SCRIPT = JOBS_DIR / "update-check.sh"
 LIBRARY_DIR = HOME / ".claude" / "skills" / "scheduled-jobs" / "library"
 
 
+KNOWN_COMMANDS = {
+    "list", "status", "fire", "pause", "resume", "edit", "logs",
+    "library", "install", "update", "config", "version",
+    "-h", "--help", "help",
+}
+
+
 # ── helpers ──────────────────────────────────────────────────────────────
+
+def jit_update_check() -> None:
+    """Print a one-line update notice if a new version is available.
+    Reads the state file left by the background update-check; no network."""
+    available = STATE_DIR / ".update-available"
+    if not available.exists():
+        return
+    try:
+        upd = json.loads(available.read_text())
+        installed = upd.get("installed", "?")
+        latest = upd.get("latest", "?")
+        if installed != latest:
+            print(f"\033[33m  update available: {installed} → {latest}"
+                  f" (run: clauck update --apply)\033[0m")
+    except (OSError, ValueError, KeyError):
+        pass
+
 
 def die(msg: str) -> None:
     print(f"error: {msg}", file=sys.stderr)
@@ -198,6 +224,63 @@ def cmd_resume(name: str) -> None:
         print(f"  reset runs counter for: {name}")
 
 
+def cmd_edit(name: str) -> None:
+    """Open job prompt in user's editor, validate on close."""
+    job_file = JOBS_DIR / f"{name}.md"
+    if not job_file.exists():
+        die(f"no job file: {job_file}")
+
+    # Determine editor: VISUAL > EDITOR > fallback
+    editor = os.environ.get("VISUAL") or os.environ.get("EDITOR") or "nano"
+
+    import shlex
+    editor_parts = shlex.split(editor)
+
+    # Record mtime before editing
+    mtime_before = job_file.stat().st_mtime
+
+    result = subprocess.run(editor_parts + [str(job_file)])
+    if result.returncode != 0:
+        print(f"  editor exited with code {result.returncode}", file=sys.stderr)
+        return
+
+    # Check if file was modified
+    mtime_after = job_file.stat().st_mtime
+    if mtime_after == mtime_before:
+        print("  no changes detected")
+        return
+
+    # Static analysis: check frontmatter parses
+    text = job_file.read_text()
+    import re
+    fm_match = re.match(r"\A---\s*\n(.*?)\n---\s*\n", text, re.DOTALL)
+    if not fm_match:
+        print("\033[33m  warning: no YAML frontmatter detected (missing --- delimiters)\033[0m")
+        return
+
+    # Validate required-ish fields
+    fm_text = fm_match.group(1)
+    issues = []
+    if "cron:" not in fm_text and "external_triggers:" not in fm_text:
+        issues.append("no cron or external_triggers — job will only fire via ad-hoc trigger")
+    if "max_budget_usd:" not in fm_text:
+        issues.append("no max_budget_usd — will use default ($2.00)")
+    if "model:" not in fm_text:
+        issues.append("no model specified — will use claude default (Opus)")
+
+    if issues:
+        print("\033[33m  notes:\033[0m")
+        for issue in issues:
+            print(f"    - {issue}")
+    else:
+        print("  \033[32m✓\033[0m saved, looks good. Changes take effect within 60s.")
+    # Also reset runs-remaining if max_runs was exhausted
+    rr = STATE_DIR / f"{name}.runs-remaining"
+    if rr.exists():
+        rr.unlink()
+        print(f"  reset runs counter for: {name}")
+
+
 def cmd_logs(name: str, last: int = 5) -> None:
     pattern = f"{name}-[0-9]*.log"
     logs = sorted(JOBS_DIR.glob(pattern), key=lambda p: p.stat().st_mtime, reverse=True)
@@ -306,6 +389,60 @@ def cmd_version() -> None:
     print(f"clauck {v}")
 
 
+def cmd_semantic(text: str) -> None:
+    """Pass natural-language text to Claude for execution against clauck.
+
+    Spawns `claude -p` with a system prompt scoping it to clauck operations.
+    The user sees only the result — no indication that an LLM is involved.
+    """
+    claude_bin = None
+    for p in [HOME / ".local" / "bin" / "claude", Path("/usr/local/bin/claude")]:
+        if p.exists():
+            claude_bin = str(p)
+            break
+    if not claude_bin:
+        import shutil
+        claude_bin = shutil.which("claude")
+    if not claude_bin:
+        die("claude CLI not found — semantic commands require claude on PATH")
+
+    system_prompt = f"""You are the clauck CLI executing a user's natural-language command.
+The user typed: `clauck {text}`
+
+You are scoped EXCLUSIVELY to clauck (scheduled-jobs) operations. Do not do anything
+outside this domain. Available operations:
+- Create, edit, pause, resume, remove scheduled jobs at {JOBS_DIR}/
+- Read the manifest at {MANIFEST}
+- Read/write state at {STATE_DIR}/
+- Read the library at {LIBRARY_DIR}/
+- Read/write config at {CONFIG_FILE}
+- Fire jobs via {TRIGGER_SCRIPT}
+- Read logs at {JOBS_DIR}/<name>-*.log
+
+Respond with ONLY the actionable output. No preamble, no explanation of what you're
+doing, no sign-off. Behave like a CLI command: input → output. If the request is
+ambiguous, make the best interpretation and execute it. If you cannot satisfy the
+request within clauck's domain, say so in one sentence.
+Do NOT add any footer, signature, branding, or sign-off to your response."""
+
+    result = subprocess.run(
+        [claude_bin, "-p", text,
+         "--append-system-prompt", system_prompt,
+         "--dangerously-skip-permissions",
+         "--max-turns", "10",
+         "--max-budget-usd", "0.30",
+         "--model", "sonnet",
+         "--output-format", "text",
+         "--setting-sources", ""],
+        capture_output=True, text=True,
+    )
+    if result.stdout.strip():
+        print(result.stdout.strip())
+    if result.returncode != 0 and result.stderr.strip():
+        print(result.stderr.strip(), file=sys.stderr)
+        sys.exit(result.returncode)
+
+
 # ── main ─────────────────────────────────────────────────────────────────
 
 def main() -> None:
@@ -313,6 +450,9 @@ def main() -> None:
     if not args or args[0] in ("-h", "--help", "help"):
         print(__doc__.strip())
         sys.exit(0)
+
+    # JIT update notice (reads local state file, no network)
+    jit_update_check()
 
     cmd = args[0]
     rest = args[1:]
@@ -327,6 +467,8 @@ def main() -> None:
         cmd_pause(rest[0])
     elif cmd == "resume" and rest:
         cmd_resume(rest[0])
+    elif cmd == "edit" and rest:
+        cmd_edit(rest[0])
     elif cmd == "logs" and rest:
         last = 5
         if "--last" in rest:
@@ -345,8 +487,12 @@ def main() -> None:
         cmd_config(rest)
     elif cmd == "version":
         cmd_version()
+    elif cmd not in KNOWN_COMMANDS:
+        # Semantic fallthrough: anything that isn't a known command is treated
+        # as natural-language input for Claude to interpret as a clauck operation.
+        cmd_semantic(" ".join(args))
     else:
-        print(f"unknown command: {cmd}", file=sys.stderr)
+        print(f"missing argument for: {cmd}", file=sys.stderr)
         print("run `clauck --help` for usage", file=sys.stderr)
         sys.exit(1)
 
