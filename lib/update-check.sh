@@ -170,7 +170,10 @@ fi
 # ──────────────────────────────────────────────────────────────────────────
 
 log "applying update $INSTALLED → $LATEST_TAG ..."
-INSTALLER_URL="https://raw.githubusercontent.com/$REPO/$LATEST_TAG/install.sh"
+# Fetch install.sh from main HEAD (always has the latest bug fixes for the
+# install process itself). The OPEN_CLAUDE_CRON_BRANCH env var tells the
+# installer to clone the release TAG for the actual payload files.
+INSTALLER_URL="https://raw.githubusercontent.com/$REPO/main/install.sh"
 TMP_INSTALLER="$(mktemp /tmp/open-claude-cron-install.XXXXXX.sh)"
 trap 'rm -f "$TMP_INSTALLER"' EXIT
 
