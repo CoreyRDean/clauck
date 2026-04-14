@@ -31,7 +31,18 @@ set -euo pipefail
 # Config — edit REPO when forking
 # ──────────────────────────────────────────────────────────────────────────
 
-REPO="${OPEN_CLAUDE_CRON_REPO:-CoreyRDean/open-claude-cron}"
+# Repo defaults to whatever was set during installation (persisted in config file).
+# Env var override takes precedence for ad-hoc testing.
+_CONFIG_REPO=""
+_CFG="$HOME/.claude/scheduled-jobs/.open-claude-cron.config.json"
+if [ -f "$_CFG" ]; then
+    _CONFIG_REPO=$(/usr/bin/python3 -c "
+import json, sys
+try: print(json.load(open('$_CFG')).get('repo',''))
+except: pass
+" 2>/dev/null || true)
+fi
+REPO="${OPEN_CLAUDE_CRON_REPO:-${_CONFIG_REPO:-CoreyRDean/open-claude-cron}}"
 
 STATE_DIR="$HOME/.claude/scheduled-jobs/.state"
 VERSION_FILE="$HOME/.claude/scheduled-jobs/.version"

@@ -17,11 +17,37 @@
 set -euo pipefail
 
 # ──────────────────────────────────────────────────────────────────────────
-# Config — edit REPO_URL when forking
+# Config — edit REPO_URL when forking, or set env var at install time
 # ──────────────────────────────────────────────────────────────────────────
 
 REPO_URL="${OPEN_CLAUDE_CRON_REPO:-https://github.com/CoreyRDean/open-claude-cron}"
 REPO_BRANCH="${OPEN_CLAUDE_CRON_BRANCH:-main}"
+
+# ──────────────────────────────────────────────────────────────────────────
+# Flags (parsed from args)
+# ──────────────────────────────────────────────────────────────────────────
+
+DRY_RUN=0
+AUTO_YES=0
+for arg in "$@"; do
+    case "$arg" in
+        --dry-run)  DRY_RUN=1 ;;
+        --yes|-y)   AUTO_YES=1 ;;
+        --help|-h)
+            cat <<HELP
+Usage: install.sh [--dry-run] [--yes]
+
+  --dry-run   Show what would be done without writing any files.
+  --yes       Accept all defaults without prompting (for automation).
+
+Environment variables:
+  OPEN_CLAUDE_CRON_REPO     Git clone URL (default: $REPO_URL)
+  OPEN_CLAUDE_CRON_BRANCH   Branch or tag to install (default: main)
+HELP
+            exit 0
+            ;;
+    esac
+done
 
 # ──────────────────────────────────────────────────────────────────────────
 # Output helpers
@@ -40,6 +66,36 @@ warn()     { printf "  %s!%s %s\n" "$C_WARN" "$C_RESET" "$*"; }
 fail()     { printf "  %s✗%s %s\n" "$C_ERR" "$C_RESET" "$*" >&2; }
 die()      { fail "$*"; exit "${2:-2}"; }
 section()  { printf "\n%s%s%s\n" "$C_BOLD" "$*" "$C_RESET"; }
+
+# prompt <message> <default y|n> → returns 0 for yes, 1 for no.
+# Reads from /dev/tty so it works under curl | bash (stdin is the pipe).
+prompt() {
+    local msg="$1" default="${2:-y}"
+    if [ "$AUTO_YES" -eq 1 ]; then return 0; fi
+    if [ "$DRY_RUN" -eq 1 ]; then return 0; fi
+    local hint="[Y/n]"
+    [ "$default" = "n" ] && hint="[y/N]"
+    printf "\n  %s %s " "$msg" "$hint"
+    local resp
+    if read -r resp </dev/tty 2>/dev/null; then
+        resp="${resp:-$default}"
+    else
+        resp="$default"
+    fi
+    case "${resp,,}" in
+        y|yes) return 0 ;;
+        *)     return 1 ;;
+    esac
+}
+
+# dry-run wrapper: if DRY_RUN, print what would happen; otherwise execute.
+run() {
+    if [ "$DRY_RUN" -eq 1 ]; then
+        printf "  %s[dry-run]%s would run: %s\n" "$C_DIM" "$C_RESET" "$*"
+        return 0
+    fi
+    "$@"
+}
 
 # ──────────────────────────────────────────────────────────────────────────
 # Locate the repo: if script runs from a checked-out tree, use it;
@@ -137,8 +193,8 @@ install_files() {
         local src="$1"
         local dst="$2"
         local mode="${3:-}"
-        cp "$src" "$dst"
-        [ -n "$mode" ] && chmod "$mode" "$dst"
+        run cp "$src" "$dst"
+        [ -n "$mode" ] && run chmod "$mode" "$dst"
         ok "installed: $dst"
     }
 
@@ -155,13 +211,30 @@ install_files() {
         ok "recorded version: $(cat "$HOME/.claude/scheduled-jobs/.version" | tr -d '[:space:]')"
     fi
 
-    # Install default config only if the user doesn't already have one.
-    # Upgrades should never overwrite user preferences.
+    # Write config: respect auto-update prompt decision + persist fork URL.
+    # Never overwrite an existing config — user preferences are sacrosanct.
     local cfg_dst="$HOME/.claude/scheduled-jobs/.open-claude-cron.config.json"
     if [ -f "$cfg_dst" ]; then
         ok "preserving existing config: $cfg_dst"
-    elif [ -f "$repo/lib/default-config.json" ]; then
-        install_file "$repo/lib/default-config.json" "$cfg_dst" 644
+    else
+        # Derive the short owner/repo form for the config file.
+        local repo_short
+        repo_short="$(echo "$REPO_URL" | sed 's|.*github\.com/||; s|\.git$||')"
+        local auto_enabled="true"
+        [ "${ENABLE_AUTO_UPDATE:-1}" -eq 0 ] && auto_enabled="false"
+        if [ "$DRY_RUN" -eq 0 ]; then
+            cat > "$cfg_dst" <<CFGEOF
+{
+  "repo": "$repo_short",
+  "auto_update": {
+    "enabled": $auto_enabled,
+    "check_interval_seconds": 3600,
+    "auto_apply": false
+  }
+}
+CFGEOF
+        fi
+        ok "wrote config: $cfg_dst (auto_update.enabled=$auto_enabled, repo=$repo_short)"
     fi
 
     section "Installing skill"
@@ -382,14 +455,60 @@ EOF
 # Main
 # ──────────────────────────────────────────────────────────────────────────
 
+confirm_plan() {
+    local repo="$1"
+    local version=""
+    [ -f "$repo/VERSION" ] && version=" ($(cat "$repo/VERSION" | tr -d '[:space:]'))"
+
+    cat <<EOF
+
+${C_BOLD}This installer will:${C_RESET}
+  ${C_DIM}core${C_RESET}  Place scheduler + executor scripts in ~/.claude/scheduled-jobs/
+  ${C_DIM}core${C_RESET}  Register a LaunchAgent (com.$USER.claude-scheduler, ticks every 60s)
+  ${C_DIM}opt ${C_RESET}  Install a Claude Code skill at ~/.claude/skills/scheduled-jobs/
+  ${C_DIM}opt ${C_RESET}  Install a pre-made job library at ~/.claude/skills/scheduled-jobs/library/
+  ${C_DIM}opt ${C_RESET}  Register a SessionStart hook in ~/.claude/settings.json
+  ${C_DIM}opt ${C_RESET}  Install the 'heartbeat' job (~\$1/month on Haiku)
+
+  Source: ${REPO_URL}${version}
+
+EOF
+    prompt "Proceed with installation?" "y" || { say "Cancelled."; exit 0; }
+}
+
+prompt_auto_update() {
+    ENABLE_AUTO_UPDATE=1
+
+    if [ "$AUTO_YES" -eq 1 ] || [ "$DRY_RUN" -eq 1 ]; then
+        return 0
+    fi
+
+    cat <<EOF
+
+${C_BOLD}Auto-updates${C_RESET}
+  The scheduler can check GitHub Releases hourly for new versions.
+  It ${C_BOLD}never${C_RESET} applies updates automatically — it only notifies you.
+  (You can enable auto-apply later in the config file if you choose.)
+
+EOF
+    if ! prompt "Enable hourly update checks?" "y"; then
+        ENABLE_AUTO_UPDATE=0
+        ok "auto-updates disabled — you can re-enable in the config file anytime"
+    fi
+}
+
 main() {
     printf "%sopen-claude-cron installer%s\n" "$C_BOLD" "$C_RESET"
+    [ "$DRY_RUN" -eq 1 ] && printf "  %s[DRY RUN — no files will be written]%s\n" "$C_WARN" "$C_RESET"
 
     preflight
 
     local repo
     repo="$(resolve_repo)"
     ok "source: $repo"
+
+    confirm_plan "$repo"
+    prompt_auto_update
 
     make_dirs
     install_files "$repo"
