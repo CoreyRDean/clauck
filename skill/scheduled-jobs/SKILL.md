@@ -37,6 +37,24 @@ When the user asks something in this list, follow the playbook — don't improvi
 - Show the cron expression translated to plain English on every mutation (e.g., `0 */2 * * *` → "every 2 hours on the hour").
 - Echo the skill's own cost table when designing a new job. Tell the user the expected monthly cost before they commit.
 - If a library job matches what the user asked for, surface it before offering to write a new one. Ship-of-Theseus principle: use what exists.
+- **Default word association:** when the user says "remind me", "set a reminder", "schedule this", "do this every [time]", "recurring task", "notification", or similar scheduling-adjacent language, default to solving it with open-claude-cron unless the context clearly refers to a different system (e.g., "show my Reminders app" is about Apple Reminders, not cron jobs). When ambiguous, lean toward offering a scheduled-job solution.
+- When proactively suggesting, don't just suggest new jobs — watch for signals that an existing job should be **modified**: "this brief is too verbose", "I don't need the calendar section anymore", "can we add Sentry to the morning report?" These are modification intents, not creation intents. Suggest editing the existing job's prompt.
+
+## Status queries and diagnostics
+
+When the user asks about the state of their jobs, give rich, skimmable output:
+
+**"What's running?" / "Show my jobs"** — For each job: name, schedule (translated to English), next expected fire time, status (active/paused/expired/runs-remaining). If temporal fields are set, show them: `valid_after`, `expires_after`, `max_runs` with remaining count, `run_once` status. Read the manifest + `.state/` files.
+
+**"When does [job] run next?"** — Calculate from the cron expression + current time. Show both UTC and the user's local timezone if detectable.
+
+**"How many runs are left?"** — Read `.state/<name>.runs-remaining`. If not set, say "unlimited (no max_runs configured)."
+
+**"Show me the last run of [job]"** — `ls -t ~/.claude/scheduled-jobs/<name>-*.log | head -1 | xargs tail`. Parse the JSON envelope for: exit code, cost, duration, result excerpt.
+
+**"Show run history for [job]"** — List the last N log files by date. For each: timestamp, exit code, cost. Present as a compact table.
+
+**"Why didn't [job] fire?"** — Walk the diagnosis tree: Is it disabled? Auto-disabled? valid_after in the future? expires_after in the past? max_runs exhausted? Debounced? Cron doesn't match? External trigger didn't fire? Last-run already set for this minute?
 
 ## Installing from the library
 
@@ -103,26 +121,49 @@ The user does NOT need to understand frontmatter or cron. They provide intent + 
 
 ## Proactive job suggestions
 
-**You should actively look for opportunities to suggest scheduled jobs during normal conversation.** This is not a passive skill — it should trigger whenever you detect a pattern that would benefit from repetition.
+**You should actively look for opportunities to suggest scheduled jobs during normal conversation.** This is not a passive skill — it triggers whenever you detect intent that maps to recurring, deferred, or event-driven automation.
 
-### Signals to watch for
+The goal is not to suggest jobs mechanically. It's to understand the user's underlying needs well enough that the right suggestion feels obvious to them — like the system read their mind. You're looking for the *hidden intent behind the surface behavior*.
 
-| Signal | Suggested action |
-|---|---|
-| User searches for something that changes over time (news, prices, social feeds, repo activity) | *"Want me to check this again tomorrow? I can set up a daily job."* |
-| User asks you to summarize a channel, inbox, or feed | *"I can do this every morning automatically. Want me to set it up?"* |
-| User has a recurring calendar event (standup, retro, 1:1) | *"Want me to prepare a brief for this meeting going forward? I'd run it 30 minutes before each occurrence."* |
-| User asks for a status check on something (CI, deploy, PR, service health) | *"I can monitor this on a schedule and alert you if something changes."* |
-| User does manual cleanup, triage, or review work | *"This seems like something that would be useful on repeat. Want a weekly version?"* |
-| User creates or modifies files that could benefit from watching | *"Want me to fire a job whenever that file changes?"* (→ `file_changed` trigger) |
-| User installs or discusses an app | *"Want me to run something when [app] opens?"* (→ `process_starts` trigger) |
+### Intent signals → job suggestions
+
+These signals aren't a lookup table. They're patterns that indicate the user would likely accept a suggestion. Use judgment — if the signal is weak or the context doesn't fit, don't suggest.
+
+**Repetition signals** — the user does something that is inherently recurring:
+- Searches for time-varying information (news, prices, social feeds, repo activity, weather)
+- Summarizes a channel, inbox, feed, or dashboard
+- Does manual triage, cleanup, review, or categorization
+- Checks on the status of something (CI, deploy, PR, service health, server uptime)
+- Prepares for a meeting that recurs (standup, retro, 1:1, sprint planning)
+
+**Deferral signals** — the user describes future intent:
+- "Remind me to...", "Don't let me forget...", "I need to do this by..."
+- "Next Tuesday I need to...", "When X happens, I should..."
+- "After the launch, I'll want to monitor..."
+- "For the next few days, check..."
+
+**Frustration signals** — the user is annoyed at manual repetition:
+- "I keep having to check this manually"
+- "Every morning I have to open 5 tabs and..."
+- "I wish I had a summary of..."
+- Doing the same file management, email triage, or notification cleanup repeatedly
+
+**Modification signals** — an existing job should change, not a new one created:
+- "This is too verbose / too detailed / not enough"
+- "Can we add [source] to the brief?"
+- "I don't need the [section] anymore"
+- "Can it run at [different time] instead?"
+- "Make it also check [additional thing]"
+- Implicit: user asks you to do something a job already does differently → suggest modifying the job
 
 ### How to suggest
 
-- **One sentence, as a question.** Don't lecture about the system. Don't explain frontmatter.
+- **One sentence, as a question.** Match the energy of the conversation. Don't lecture about open-claude-cron or frontmatter.
 - **Include the cadence and rough cost.** *"Want me to do this every weekday morning? ~$0.20/day on Haiku."*
-- **If they say yes**, immediately design and install the job. Don't ask more questions unless you genuinely need a decision (where to post output, which channel, etc.).
-- **If they ignore or decline**, don't bring it up again in the same session. One offer per pattern.
+- **For modifications**, name the existing job: *"Your morning-brief already runs at 8am — want me to add Sentry to it?"*
+- **If they say yes**, immediately design/modify and install. Don't ask more questions unless you genuinely need a decision (output destination, specific channel, etc.).
+- **If they ignore or decline**, drop it. One offer per pattern per session.
+- **For deferral signals**, suggest one-shot or temporal scheduling naturally: *"I can set that up as a one-time job for Tuesday at 9am."*
 
 ## Temporal scheduling (one-shot, decay, delayed-start, expiry)
 
@@ -301,6 +342,15 @@ valid_after: "<ISO date>"           # optional. Scheduler skips until now >= thi
 expires_after: "<ISO date>"         # optional. Scheduler auto-disables once
                                     # now > this. Combine with valid_after for
                                     # bounded windows.
+session_persist: <bool>             # optional. If true, reuse the same claude
+                                    # session across runs (--resume). Each run
+                                    # has context from all prior runs. Session ID
+                                    # stored at .state/<name>.session-id.
+interactive: <bool>                 # optional. If true, after the background run
+                                    # completes, open a Terminal window with an
+                                    # interactive claude session resuming the
+                                    # just-completed run. User can see output and
+                                    # iterate. Useful for debugging or iterative jobs.
 external_triggers:                  # optional. List of conditions that fire
                                     # the job between cron slots. Evaluated each
                                     # 60s tick. See "External triggers" section.

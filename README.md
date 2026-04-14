@@ -34,6 +34,28 @@ Claude handles the cron, the prompt, the budget, the cleanup. You describe the i
 
 ## What you get
 
+### Why not just use Claude's built-in scheduling?
+
+Claude Code has native `/loop`, Desktop scheduled tasks, and Cloud scheduled tasks. They're great for simple cases. This project exists for what they can't do:
+
+| | Native (Desktop/Cloud) | open-claude-cron |
+|---|---|---|
+| Event triggers (files, apps, shell conditions) | No | Yes — 4 trigger types, zero token cost |
+| Cross-run memory (session persistence) | No — fresh session each time | Yes — `session_persist: true` resumes the same session |
+| Interactive follow-up after a scheduled run | No | Yes — opens Terminal for you to continue |
+| Job library (browse, install, share) | No | Yes — 7+ curated, community-extensible |
+| Temporal scheduling (one-shot, decay, delayed-start, expiry) | One-shot only | Full set |
+| Per-job model, budget, MCP surface control | Partial | Yes — per-job frontmatter |
+| Concurrent-run guards + debouncing | No | Yes |
+| Semantic hooks (agent-to-agent delegation) | No | Yes — manifest-driven |
+| Works without Desktop app open | Cloud only (no local files) | Yes — launchd runs at OS level |
+| Auto-updates from GitHub Releases | N/A | Yes (notify-only default) |
+| Fork-first (no vendor lock-in) | N/A | Yes |
+
+Use native scheduling for quick throwaway loops. Use open-claude-cron for persistent, event-driven, cross-session automation with full control over cost, output, and tooling.
+
+## What you get
+
 | Feature | What it does |
 |---|---|
 | **Cron scheduling** | Standard 5-field cron expressions. `*/5 * * * *`, `0 9 * * 1-5`, etc. |

@@ -228,8 +228,46 @@ if [ "${CLAUDE_JOB_STRICT_MCP_CONFIG:-}" = "1" ]; then
   CLAUDE_ARGS+=(--strict-mcp-config --mcp-config "$EMPTY_MCP_CONFIG")
 fi
 
+# --- Session persistence: reuse the same session across runs ---
+# On first run, we capture session_id from the JSON output and store it.
+# On subsequent runs, we pass --resume <session_id> so claude has context
+# from all prior runs of this job.
+SESSION_ID_FILE="$STATE_DIR/${JOB_NAME}.session-id"
+if [ "${CLAUDE_JOB_SESSION_PERSIST:-}" = "1" ] && [ -f "$SESSION_ID_FILE" ]; then
+  STORED_SID="$(cat "$SESSION_ID_FILE" 2>/dev/null | tr -d '[:space:]')"
+  if [ -n "$STORED_SID" ]; then
+    CLAUDE_ARGS+=(--resume "$STORED_SID")
+    echo "stage=session_resume session_id=$STORED_SID" >> "$LOG_FILE"
+  fi
+fi
+
 "$CLAUDE_BIN" "${CLAUDE_ARGS[@]}" >> "$LOG_FILE" 2>&1
 
 EXIT_CODE=$?
+
+# Capture session_id for future runs (session persistence).
+if [ "${CLAUDE_JOB_SESSION_PERSIST:-}" = "1" ]; then
+  NEW_SID="$(grep -o '"session_id":"[^"]*"' "$LOG_FILE" 2>/dev/null | tail -1 | sed 's/"session_id":"//;s/"$//')"
+  if [ -n "$NEW_SID" ]; then
+    echo "$NEW_SID" > "$SESSION_ID_FILE"
+  fi
+fi
+
+# --- Interactive follow-up: open Terminal for the user to continue ---
+if [ "${CLAUDE_JOB_INTERACTIVE:-}" = "1" ] && [ "$EXIT_CODE" -eq 0 ]; then
+  RESUME_SID=""
+  if [ -f "$SESSION_ID_FILE" ]; then
+    RESUME_SID="$(cat "$SESSION_ID_FILE" 2>/dev/null | tr -d '[:space:]')"
+  else
+    RESUME_SID="$(grep -o '"session_id":"[^"]*"' "$LOG_FILE" 2>/dev/null | tail -1 | sed 's/"session_id":"//;s/"$//')"
+  fi
+  if [ -n "$RESUME_SID" ]; then
+    # Open a new Terminal window with an interactive claude session resuming
+    # the just-completed run. The user sees the output and can iterate.
+    osascript -e "tell application \"Terminal\" to do script \"claude --resume $RESUME_SID\"" 2>/dev/null || true
+    echo "stage=interactive_opened session_id=$RESUME_SID" >> "$LOG_FILE"
+  fi
+fi
+
 echo "--- exit_code=$EXIT_CODE ===" >> "$LOG_FILE"
 exit $EXIT_CODE

@@ -256,6 +256,14 @@ def discover_jobs() -> list[dict]:
                 # expires_after: ISO8601 date or datetime. Scheduler auto-disables
                 # once now > this.
                 "expires_after": str(fm.get("expires_after", "")).strip(),
+                # --- session ---
+                # session_persist: if true, run-job.sh passes --resume to
+                # reuse the same session across runs (cross-run context).
+                "session_persist": bool(fm.get("session_persist", False)),
+                # interactive: if true, opens a Terminal window with the
+                # running session visible, and leaves it open for user
+                # follow-up after completion.
+                "interactive": bool(fm.get("interactive", False)),
                 # --- triggers ---
                 # external_triggers: list of flow-style-object conditions that,
                 # if met, cause the job to fire between cron slots. Evaluated
@@ -575,6 +583,10 @@ def fire(job: dict, trigger: str = "scheduled") -> None:
         env["CLAUDE_JOB_STRICT_MCP_CONFIG"] = "1"
     if job.get("debounce_seconds"):
         env["CLAUDE_JOB_DEBOUNCE_SECONDS"] = str(job["debounce_seconds"])
+    if job.get("session_persist"):
+        env["CLAUDE_JOB_SESSION_PERSIST"] = "1"
+    if job.get("interactive"):
+        env["CLAUDE_JOB_INTERACTIVE"] = "1"
     env["CLAUDE_JOB_TRIGGER"] = trigger
     env["CLAUDE_JOB_FIRED_AT"] = datetime.now(timezone.utc).isoformat()
 
