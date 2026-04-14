@@ -14,6 +14,7 @@ Usage:
     clauck update [--apply]              Check for / apply updates
     clauck config [set <key> <value>]    Show or edit config
     clauck doctor [-i|--interactive]     Diagnose system health
+    clauck peek                          Live-tail all job logs (Ctrl+C to stop)
     clauck version                       Show version
     clauck work <text>                   Explicit semantic command (alias)
     clauck <anything else>               Natural-language command (uses Claude)
@@ -47,7 +48,7 @@ MARKETPLACE_DIR = HOME / ".claude" / "skills" / "scheduled-jobs" / "marketplace"
 
 KNOWN_COMMANDS = {
     "list", "status", "fire", "pause", "resume", "edit", "logs",
-    "marketplace", "install", "update", "config", "version", "doctor", "work",
+    "marketplace", "install", "update", "config", "version", "doctor", "peek", "work",
     "-h", "--help", "help",
 }
 
@@ -415,6 +416,57 @@ def cmd_config(args: list[str]) -> None:
     print(f"  set {args[1]} = {value}")
 
 
+def cmd_peek() -> None:
+    """Live-tail all job + scheduler + DAG logs in a unified stream."""
+    import signal
+
+    print("  clauck peek — live log stream (Ctrl+C to stop)\n")
+
+    # Build the tail command: scheduler stdout/stderr + all job logs
+    targets = [
+        str(JOBS_DIR / ".scheduler-stdout.log"),
+        str(JOBS_DIR / ".scheduler-stderr.log"),
+    ]
+    # tail -f on existing + future log files via a glob trick:
+    # we tail the scheduler logs and use a polling loop to pick up new job logs
+    try:
+        proc = subprocess.Popen(
+            ["tail", "-f"] + targets + ["-n", "0"],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            text=True,
+        )
+        # Also start a background tail on the most recent job logs
+        import threading
+        import glob
+        import time
+
+        seen_files: set = set()
+
+        def watch_new_logs():
+            while True:
+                current = set(glob.glob(str(JOBS_DIR / "*-[0-9]*.log")))
+                new = current - seen_files
+                for f in sorted(new):
+                    seen_files.add(f)
+                    # Start a tail on the new file
+                    subprocess.Popen(
+                        ["tail", "-f", "-n", "5", f],
+                        stderr=subprocess.DEVNULL,
+                    )
+                time.sleep(2)
+
+        watcher = threading.Thread(target=watch_new_logs, daemon=True)
+        watcher.start()
+
+        # Stream scheduler output to terminal
+        for line in proc.stdout:
+            print(line, end="", flush=True)
+    except KeyboardInterrupt:
+        proc.terminate()
+        print("\n  peek stopped.")
+
+
 def cmd_version() -> None:
     v = VERSION_FILE.read_text().strip() if VERSION_FILE.exists() else "unknown"
     print(f"clauck {v}")
@@ -587,6 +639,8 @@ def main() -> None:
         cmd_config(rest)
     elif cmd == "version":
         cmd_version()
+    elif cmd == "peek":
+        cmd_peek()
     elif cmd == "doctor":
         cmd_doctor(interactive=("-i" in rest or "--interactive" in rest))
     elif cmd == "work":

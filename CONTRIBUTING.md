@@ -53,7 +53,7 @@ The installer uses the local `lib/`, `jobs/`, and `skill/` directories when it d
 
 ## Adding a job to the marketplace
 
-The marketplace lives at `marketplace/` in the repo. When users install or update clauck, the marketplace is cached locally at `~/.claude/skills/scheduled-jobs/marketplace/` so Claude can browse and install jobs offline.
+The marketplace lives at `marketplace/` in the repo. When users install or update clauck, the marketplace is cached locally at `~/.claude/skills/clauck/marketplace/` so Claude can browse and install jobs offline.
 
 ### Requirements for marketplace jobs
 

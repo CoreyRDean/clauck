@@ -47,7 +47,7 @@ FILES=(
     "$HOME/.claude/scheduled-jobs/.version"
     "$HOME/.claude/scheduled-jobs-prompt.md"
     "$HOME/.claude/hooks/scheduled-jobs-notice.sh"
-    "$HOME/.claude/skills/scheduled-jobs/SKILL.md"
+    "$HOME/.claude/skills/clauck/SKILL.md"
     "$HOME/.local/bin/clauck"
 )
 for f in "${FILES[@]}"; do
@@ -57,14 +57,14 @@ for f in "${FILES[@]}"; do
     fi
 done
 # Marketplace dir (cached copy of the curated job catalog).
-if [ -d "$HOME/.claude/skills/scheduled-jobs/marketplace" ]; then
-    rm -rf "$HOME/.claude/skills/scheduled-jobs/marketplace"
-    ok "removed: ~/.claude/skills/scheduled-jobs/marketplace"
+if [ -d "$HOME/.claude/skills/clauck/marketplace" ]; then
+    rm -rf "$HOME/.claude/skills/clauck/marketplace"
+    ok "removed: ~/.claude/skills/clauck/marketplace"
 fi
 # Try to clean the skill dir if empty
-[ -d "$HOME/.claude/skills/scheduled-jobs" ] \
-    && rmdir "$HOME/.claude/skills/scheduled-jobs" 2>/dev/null \
-    && ok "removed empty dir: ~/.claude/skills/scheduled-jobs"
+[ -d "$HOME/.claude/skills/clauck" ] \
+    && rmdir "$HOME/.claude/skills/clauck" 2>/dev/null \
+    && ok "removed empty dir: ~/.claude/skills/clauck"
 
 say "Unregistering SessionStart hook from ~/.claude/settings.json"
 SETTINGS="$HOME/.claude/settings.json"

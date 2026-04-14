@@ -29,8 +29,8 @@ If you're running in a non-CLI harness: be upfront with the user about what you 
 1. **Verify you're in a Claude Code CLI session** (not Desktop, not Cloud). If not, explain the limitation.
 2. Run: `curl -sSL https://raw.githubusercontent.com/CoreyRDean/clauck/main/install.sh | bash`
 3. The installer handles everything: preflight, file placement, LaunchAgent, settings.json hook, marketplace, verification via heartbeat fire.
-4. After install, read `~/.claude/skills/scheduled-jobs/SKILL.md` — it's the full operational playbook.
-5. Browse the marketplace: `cat ~/.claude/skills/scheduled-jobs/marketplace/index.json | python3 -m json.tool`
+4. After install, read `~/.claude/skills/clauck/SKILL.md` — it's the full operational playbook.
+5. Browse the marketplace: `cat ~/.claude/skills/clauck/marketplace/index.json | python3 -m json.tool`
 6. Help the user pick and customize jobs, or design new ones from their intent.
 
 ## If you're working on this repo (contributing)
@@ -81,8 +81,8 @@ launchd (60s tick) → scheduler.py
 | State | `~/.claude/scheduled-jobs/.state/` |
 | Config | `~/.claude/scheduled-jobs/.clauck.config.json` |
 | Version | `~/.claude/scheduled-jobs/.version` |
-| Skill | `~/.claude/skills/scheduled-jobs/SKILL.md` |
-| Marketplace | `~/.claude/skills/scheduled-jobs/marketplace/` |
+| Skill | `~/.claude/skills/clauck/SKILL.md` |
+| Marketplace | `~/.claude/skills/clauck/marketplace/` |
 | Hook | `~/.claude/hooks/scheduled-jobs-notice.sh` |
 | CLI | `~/.local/bin/clauck` |
 | LaunchAgent | `~/Library/LaunchAgents/com.$USER.claude-scheduler.plist` |

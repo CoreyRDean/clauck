@@ -15,6 +15,8 @@
 Workflow automation powered by AI agents. Schedule tasks, chain pipelines, react to events, and build automations that think — all from plain English.
 
 > **Hey Claude, install clauck**
+>
+> <sub>If Claude can't find it: *"Hey Claude, install CoreyRDean/clauck from GitHub"*</sub>
 
 Paste that into Claude Code. Done.
 

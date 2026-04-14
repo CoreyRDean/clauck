@@ -34,11 +34,11 @@ clauck runs `claude -p` sessions with `--dangerously-skip-permissions` under a l
 
 ### What users should do
 
-- **Review job prompts before installing them.** Library jobs are curated but user-submitted. Read the `.md` file before copying it into your scheduled-jobs directory.
+- **Review job prompts before installing them.** Marketplace jobs are curated but user-submitted. Read the `.md` file before copying it into your scheduled-jobs directory.
 - **Prefer notify-only auto-updates** (`auto_apply: false`, the default). When a new version is available, review the release notes before applying.
 - **Fork if you need full control.** Installing from your own fork means you review every change before it reaches your machine.
 - **Monitor logs.** `~/.claude/scheduled-jobs/<name>-*.log` files show exactly what each job did. Review periodically.
 
 ## Scope
 
-This policy covers the clauck codebase (`install.sh`, `scheduler.py`, `run-job.sh`, `trigger-job.sh`, `update-check.sh`, the skill, and the library). It does not cover the Claude CLI itself, Claude's model behavior, or MCP server implementations.
+This policy covers the clauck codebase (`install.sh`, `scheduler.py`, `run-job.sh`, `trigger-job.sh`, `update-check.sh`, the skill, and the marketplace). It does not cover the Claude CLI itself, Claude's model behavior, or MCP server implementations.

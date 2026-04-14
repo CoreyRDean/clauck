@@ -186,6 +186,8 @@ RUNTIME_CONTEXT="# Runtime Context (this invocation)
 - **Fired at:** ${FIRED_AT}
 - **Budget:** max_turns=${MAX_TURNS}, max_budget_usd=\$${MAX_BUDGET_USD}, effort=${EFFORT}
 - **Working directory:** $(pwd)
+- **User home:** ${HOME}
+- **Local timezone:** $(date +%Z) (UTC offset: $(date +%z))
 - **Log file (this run):** ${LOG_FILE}
 - **Jobs directory:** ${JOBS_DIR}
 - **Manifest (all jobs, with semantic_hooks and trigger_commands):** ${JOBS_DIR}/.manifest.json
@@ -193,6 +195,22 @@ RUNTIME_CONTEXT="# Runtime Context (this invocation)
 
 Spend proportional to value. Budget is a cap, not a target. If there is nothing meaningful to do, exit cleanly with a brief note — a no-op is a legitimate outcome for a scheduled invocation.
 These limits are enforced — exceeding max_budget_usd or max_turns terminates the session immediately."
+
+# Append any CLAUCK_INPUT_* env vars as custom input to the runtime context
+CUSTOM_INPUTS=""
+for var in $(env | grep '^CLAUCK_INPUT_' | sort); do
+  key="${var%%=*}"
+  val="${var#*=}"
+  short_key="${key#CLAUCK_INPUT_}"
+  CUSTOM_INPUTS="${CUSTOM_INPUTS}
+- **${short_key}:** ${val}"
+done
+if [ -n "$CUSTOM_INPUTS" ]; then
+  RUNTIME_CONTEXT="${RUNTIME_CONTEXT}
+
+## Custom inputs (passed via trigger)
+${CUSTOM_INPUTS}"
+fi
 
 # --- Inject producer outputs if this job was invoked as part of a pipeline ---
 PRODUCER_OUTPUTS=""

@@ -18,7 +18,7 @@ and report cleanly.
    verbatim to the user, then briefly explain:
    - Default heartbeat job is running hourly, ~$1/month.
    - SessionStart hook will advertise the system to future Claude sessions.
-   - The `scheduled-jobs` skill at `~/.claude/skills/scheduled-jobs/SKILL.md`
+   - The `scheduled-jobs` skill at `~/.claude/skills/clauck/SKILL.md`
      is how they manage it going forward.
 
 3. If the installer exits non-zero, diagnose:

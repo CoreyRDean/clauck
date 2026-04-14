@@ -21,9 +21,9 @@ Nothing yet.
 - **Preflight-failure observability:** log file created before any preflight check; failures produce `--- preflight_fail: <reason> ===` tombstones instead of vanishing into DEVNULL.
 - **Log rotation:** caps at 100 log files per job name.
 - **Minimal YAML parser** supporting flat scalars, string lists, and flow-style object lists (no PyYAML dependency).
-- **SessionStart hook** (`scheduled-jobs-notice.sh`) registered in `~/.claude/settings.json`; advertises the system and library to every new agent session without polluting CLAUDE.md.
-- **Claude Code skill** (`scheduled-jobs`) with comprehensive docs: architecture, frontmatter schema, install recipe, common mutations, external triggers, concurrency/debounce, cost reality table, diagnosis flowchart, library browsing, update management.
-- **Pre-made job library** with curated jobs cached locally for offline browsing:
+- **SessionStart hook** (`scheduled-jobs-notice.sh`) registered in `~/.claude/settings.json`; advertises the system and marketplace to every new agent session without polluting CLAUDE.md.
+- **Claude Code skill** (`scheduled-jobs`) with comprehensive docs: architecture, frontmatter schema, install recipe, common mutations, external triggers, concurrency/debounce, cost reality table, diagnosis flowchart, marketplace browsing, update management.
+- **Pre-made job marketplace** with curated jobs cached locally for offline browsing:
   - `verification/daily-verify.md` — daily MCP-surface health check.
   - `organization/downloads-triage.md` — file_added trigger on `~/Downloads`.
 - **Auto-update system:** checks GitHub Releases hourly (configurable via `~/.claude/scheduled-jobs/.clauck.config.json`); notify-only by default; opt-in auto-apply.

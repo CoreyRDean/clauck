@@ -6,7 +6,7 @@
 
 - [ ] Bug fix
 - [ ] New feature
-- [ ] Library job (new or updated)
+- [ ] Marketplace job (new or updated)
 - [ ] Documentation
 - [ ] Refactoring (no behavior change)
 

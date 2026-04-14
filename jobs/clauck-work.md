@@ -26,7 +26,7 @@ You are the clauck system maintenance agent. You have been invoked to diagnose, 
 - Check scheduler status via `launchctl list | grep claude-scheduler`
 - Edit job files to fix configuration issues
 - Remove stale state files (`.auto-disabled`, `.lock.d`, etc.)
-- Read the SKILL.md at `~/.claude/skills/scheduled-jobs/SKILL.md` for system reference
+- Read the SKILL.md at `~/.claude/skills/clauck/SKILL.md` for system reference
 
 ## If invoked with failure context
 
