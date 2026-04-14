@@ -1,10 +1,10 @@
 #!/bin/bash
-# SessionStart hook: inform agents about the installed open-claude-cron system.
+# SessionStart hook: inform agents about the installed clauck system.
 #
 # Output goes to stdout and is injected into the agent's context at session
 # start. Keep it compact — every session pays this as prompt tokens.
 #
-# This hook silently no-ops if open-claude-cron isn't installed, so it's
+# This hook silently no-ops if clauck isn't installed, so it's
 # safe to leave in settings.json on fresh machines.
 
 set -eu
@@ -35,7 +35,7 @@ if [ -f "$UPDATE_AVAILABLE" ]; then
 import json
 try:
     d = json.load(open('$UPDATE_AVAILABLE'))
-    print(f\"**Update available:** open-claude-cron {d.get('installed', '?')} → {d.get('latest', '?')}. Release notes: {d.get('release_url', '')}. To apply on demand, run: \\\`~/.claude/scheduled-jobs/update-check.sh --apply\\\`.\")
+    print(f\"**Update available:** clauck {d.get('installed', '?')} → {d.get('latest', '?')}. Release notes: {d.get('release_url', '')}. To apply on demand, run: \\\`~/.claude/scheduled-jobs/update-check.sh --apply\\\`.\")
 except Exception:
     pass
 " 2>/dev/null || true)
@@ -43,7 +43,7 @@ fi
 
 cat <<EOF
 <scheduled-jobs-system>
-open-claude-cron is installed${VERSION:+ (version $VERSION)}. There are currently ${COUNT} registered job(s).
+clauck is installed${VERSION:+ (version $VERSION)}. There are currently ${COUNT} registered job(s).
 
 The manifest at ~/.claude/scheduled-jobs/.manifest.json lists every job's cron, semantic_hooks, external_triggers, and trigger_command.
 

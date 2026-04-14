@@ -1,12 +1,12 @@
 # Library of pre-made scheduled jobs
 
-Curated job prompts you can install into your own `open-claude-cron` setup. The install script copies the library into `~/.claude/skills/scheduled-jobs/library/` so any Claude session can browse and copy-install them without cloning the repo.
+Curated job prompts you can install into your own `clauck` setup. The install script copies the library into `~/.claude/skills/scheduled-jobs/library/` so any Claude session can browse and copy-install them without cloning the repo.
 
 ## Browsing from a Claude session
 
 Ask your Claude session something like:
 
-> "What library jobs are available in open-claude-cron?"
+> "What library jobs are available in clauck?"
 > "Show me library jobs for file organization."
 > "Install the daily-verify library job."
 

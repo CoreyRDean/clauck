@@ -1,5 +1,5 @@
 #!/bin/bash
-# uninstall.sh — remove open-claude-cron from this machine.
+# uninstall.sh — remove clauck from this machine.
 #
 # Safe to re-run. Any file that's already gone is silently skipped.
 #
@@ -47,6 +47,7 @@ FILES=(
     "$HOME/.claude/scheduled-jobs-prompt.md"
     "$HOME/.claude/hooks/scheduled-jobs-notice.sh"
     "$HOME/.claude/skills/scheduled-jobs/SKILL.md"
+    "$HOME/.local/bin/clauck"
 )
 for f in "${FILES[@]}"; do
     if [ -e "$f" ]; then
@@ -117,4 +118,4 @@ else
     warn "Kept ~/.claude/scheduled-jobs/ (job files, state, logs, config). Use --wipe to remove."
 fi
 
-printf "\n%s%s✓ open-claude-cron uninstalled%s\n\n" "$C_BOLD" "$C_OK" "$C_RESET"
+printf "\n%s%s✓ clauck uninstalled%s\n\n" "$C_BOLD" "$C_OK" "$C_RESET"

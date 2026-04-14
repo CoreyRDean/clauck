@@ -1,24 +1,30 @@
-# open-claude-cron
+# clauck
 
-**Give Claude a schedule.** Hourly digests, daily standups, file-watcher reactions, email triage, PR reviews — whatever you'd want an agent to do on repeat, without you being there.
+**Your agent, on the clock.** Morning digests before you open Slack. PR reviews while you sleep. File triage when downloads land. Reminders that actually do the thing, not just tell you about it.
 
-### Install it in one sentence:
+> **Hey Claude, install clauck**
 
-> **Hey Claude, install open-claude-cron**
-
-Paste that into any Claude Code session. Claude will find the repo, run the installer, verify the pipeline, and walk you through picking your first scheduled jobs.
-
-Or use the shell one-liner directly:
+That's it. Paste that into Claude Code. Claude finds the repo, installs the system, verifies it's working, and asks what you want to schedule first.
 
 ```bash
-curl -sSL https://raw.githubusercontent.com/CoreyRDean/open-claude-cron/main/install.sh | bash
+# Or the shell way:
+curl -sSL https://raw.githubusercontent.com/CoreyRDean/clauck/main/install.sh | bash
+```
+
+```bash
+# Or manage with the CLI:
+clauck list                   # what's running?
+clauck fire morning-brief     # run it now
+clauck library                # browse pre-made jobs
+clauck install github-pr-digest   # install one
+clauck status                 # system health
 ```
 
 ---
 
 ## Why
 
-Claude Code is powerful in a terminal. But you have to be there to use it. open-claude-cron makes Claude work when you're not — on a schedule, in response to file changes, when apps open, or when conditions change. Your agent works while you sleep.
+Claude Code is powerful in a terminal. But you have to be there to use it. clauck makes Claude work when you're not — on a schedule, in response to file changes, when apps open, or when conditions change. Your agent works while you sleep.
 
 **Just want things done on repeat?** Tell Claude what you want:
 
@@ -38,7 +44,7 @@ Claude handles the cron, the prompt, the budget, the cleanup. You describe the i
 
 Claude Code has native `/loop`, Desktop scheduled tasks, and Cloud scheduled tasks. They're great for simple cases. This project exists for what they can't do:
 
-| | Native (Desktop/Cloud) | open-claude-cron |
+| | Native (Desktop/Cloud) | clauck |
 |---|---|---|
 | Event triggers (files, apps, shell conditions) | No | Yes — 4 trigger types, zero token cost |
 | Cross-run memory (session persistence) | No — fresh session each time | Yes — `session_persist: true` resumes the same session |
@@ -52,7 +58,7 @@ Claude Code has native `/loop`, Desktop scheduled tasks, and Cloud scheduled tas
 | Auto-updates from GitHub Releases | N/A | Yes (notify-only default) |
 | Fork-first (no vendor lock-in) | N/A | Yes |
 
-Use native scheduling for quick throwaway loops. Use open-claude-cron for persistent, event-driven, cross-session automation with full control over cost, output, and tooling.
+Use native scheduling for quick throwaway loops. Use clauck for persistent, event-driven, cross-session automation with full control over cost, output, and tooling.
 
 ## What you get
 
@@ -74,7 +80,7 @@ Use native scheduling for quick throwaway loops. Use open-claude-cron for persis
 ## Install
 
 ```bash
-curl -sSL https://raw.githubusercontent.com/CoreyRDean/open-claude-cron/main/install.sh | bash
+curl -sSL https://raw.githubusercontent.com/CoreyRDean/clauck/main/install.sh | bash
 ```
 
 **What the installer does** (it tells you all this before asking for confirmation):
@@ -89,7 +95,7 @@ curl -sSL https://raw.githubusercontent.com/CoreyRDean/open-claude-cron/main/ins
 **Inspect before running:**
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/CoreyRDean/open-claude-cron/main/install.sh -o install.sh
+curl -fsSL https://raw.githubusercontent.com/CoreyRDean/clauck/main/install.sh -o install.sh
 less install.sh   # read every line
 bash install.sh
 ```
@@ -97,18 +103,18 @@ bash install.sh
 **Dry run** (shows what would happen, writes nothing):
 
 ```bash
-curl -sSL https://raw.githubusercontent.com/CoreyRDean/open-claude-cron/main/install.sh | bash -s -- --dry-run
+curl -sSL https://raw.githubusercontent.com/CoreyRDean/clauck/main/install.sh | bash -s -- --dry-run
 ```
 
 **Non-interactive** (accepts defaults, for automation):
 
 ```bash
-curl -sSL https://raw.githubusercontent.com/CoreyRDean/open-claude-cron/main/install.sh | bash -s -- --yes
+curl -sSL https://raw.githubusercontent.com/CoreyRDean/clauck/main/install.sh | bash -s -- --yes
 ```
 
 **Or just tell Claude** — paste this into any Claude Code session:
 
-> Install open-claude-cron from github.com/CoreyRDean/open-claude-cron. Read the repo's CLAUDE.md for instructions, then run the installer and help me pick jobs from the library.
+> Install clauck from github.com/CoreyRDean/clauck. Read the repo's CLAUDE.md for instructions, then run the installer and help me pick jobs from the library.
 
 Claude will fetch the repo's CLAUDE.md, follow the install instructions, and walk you through the library.
 
@@ -130,8 +136,8 @@ The installer checks for these and tells you exactly what's missing:
 Fork the repo, then install with your fork as the source and update channel:
 
 ```bash
-OPEN_CLAUDE_CRON_REPO=https://github.com/youruser/open-claude-cron \
-  bash <(curl -fsSL https://raw.githubusercontent.com/youruser/open-claude-cron/main/install.sh)
+CLAUCK_REPO=https://github.com/youruser/clauck \
+  bash <(curl -fsSL https://raw.githubusercontent.com/youruser/clauck/main/install.sh)
 ```
 
 The installer writes your fork URL into the local config. Future update checks target your fork exclusively — the upstream repo has no mechanism to push anything to your machine. You review and merge upstream changes on your own terms.
@@ -182,7 +188,7 @@ The scheduler discovers it within 60 seconds. No reload, no restart.
 
 ### Browse the library
 
-Ask Claude: *"What open-claude-cron jobs are in the library?"*
+Ask Claude: *"What clauck jobs are in the library?"*
 
 Ships with 7 curated jobs across 4 categories:
 
@@ -255,7 +261,7 @@ This system runs `claude -p --dangerously-skip-permissions` in a background Laun
 
 **If you don't trust upstream:**
 - Fork the repo.
-- Install from your fork: `OPEN_CLAUDE_CRON_REPO=https://github.com/you/open-claude-cron bash install.sh`.
+- Install from your fork: `CLAUCK_REPO=https://github.com/you/clauck bash install.sh`.
 - Update checks target your fork. Upstream merges happen on your terms.
 
 See [SECURITY.md](SECURITY.md) for the full threat model and vulnerability reporting process.
@@ -302,10 +308,10 @@ ls -t ~/.claude/scheduled-jobs/<name>-*.log | head -1 | xargs tail
 launchctl list | grep claude-scheduler
 
 # Uninstall (preserves your jobs):
-bash <(curl -sSL https://raw.githubusercontent.com/CoreyRDean/open-claude-cron/main/uninstall.sh)
+bash <(curl -sSL https://raw.githubusercontent.com/CoreyRDean/clauck/main/uninstall.sh)
 
 # Full removal including jobs:
-bash <(curl -sSL https://raw.githubusercontent.com/CoreyRDean/open-claude-cron/main/uninstall.sh) --wipe
+bash <(curl -sSL https://raw.githubusercontent.com/CoreyRDean/clauck/main/uninstall.sh) --wipe
 ```
 
 ## Requirements

@@ -1,9 +1,9 @@
 ---
 name: scheduled-jobs
-description: Manage open-claude-cron — a launchd-driven scheduler that runs cron-style `claude -p` jobs on macOS with event triggers and a pre-made job library. Use this skill to add/remove/edit/pause jobs, browse and install from the library, check for updates, inspect run logs, diagnose failures, or answer questions about how the system works.
+description: Manage clauck — a launchd-driven scheduler that runs cron-style `claude -p` jobs on macOS with event triggers and a pre-made job library. Use this skill to add/remove/edit/pause jobs, browse and install from the library, check for updates, inspect run logs, diagnose failures, or answer questions about how the system works.
 ---
 
-# open-claude-cron (macOS launchd → `claude -p`)
+# clauck (macOS launchd → `claude -p`)
 
 A minimal system that runs Claude Code prompts on a cron schedule under macOS launchd. Useful for hourly heartbeats, daily digests, periodic inbox triage, scheduled reminders, async monitoring — anything you'd want Claude to do on a cadence without a human in the loop.
 
@@ -21,7 +21,7 @@ When the user asks something in this list, follow the playbook — don't improvi
 | "Change job X to run every N …" | Edit `cron:` field. Show them the new cron string and what it means in plain English. |
 | "Check for updates" / "Is there a new version?" | Run `~/.claude/scheduled-jobs/update-check.sh`. Report the result (up-to-date, or new version with release URL). |
 | "Apply the update" | Run `~/.claude/scheduled-jobs/update-check.sh --apply`. The installer re-runs against the release tag; verify the heartbeat still fires after. |
-| "Disable auto-updates" / "Change update frequency" | Edit `~/.claude/scheduled-jobs/.open-claude-cron.config.json`. See **Auto-update configuration** below. |
+| "Disable auto-updates" / "Change update frequency" | Edit `~/.claude/scheduled-jobs/.clauck.config.json`. See **Auto-update configuration** below. |
 | "Why isn't job X firing?" / "It broke" | See **Diagnosing failures** section. Walk the hierarchy: launchd loaded? last-run state? preflight log? JSON envelope. |
 | "Do this once at [time]" / "Run this tomorrow at 9am" | Set `cron` to match the target time + `run_once: true`. Explain it fires once then auto-disables. |
 | "Do this for the next N days/times" | Set `cron` + `max_runs: N`. Or `cron` + `expires_after: <date>`. Pick whichever is more natural for the request. |
@@ -37,7 +37,7 @@ When the user asks something in this list, follow the playbook — don't improvi
 - Show the cron expression translated to plain English on every mutation (e.g., `0 */2 * * *` → "every 2 hours on the hour").
 - Echo the skill's own cost table when designing a new job. Tell the user the expected monthly cost before they commit.
 - If a library job matches what the user asked for, surface it before offering to write a new one. Ship-of-Theseus principle: use what exists.
-- **Default word association:** when the user says "remind me", "set a reminder", "schedule this", "do this every [time]", "recurring task", "notification", or similar scheduling-adjacent language, default to solving it with open-claude-cron unless the context clearly refers to a different system (e.g., "show my Reminders app" is about Apple Reminders, not cron jobs). When ambiguous, lean toward offering a scheduled-job solution.
+- **Default word association:** when the user says "remind me", "set a reminder", "schedule this", "do this every [time]", "recurring task", "notification", or similar scheduling-adjacent language, default to solving it with clauck unless the context clearly refers to a different system (e.g., "show my Reminders app" is about Apple Reminders, not cron jobs). When ambiguous, lean toward offering a scheduled-job solution.
 - When proactively suggesting, don't just suggest new jobs — watch for signals that an existing job should be **modified**: "this brief is too verbose", "I don't need the calendar section anymore", "can we add Sentry to the morning report?" These are modification intents, not creation intents. Suggest editing the existing job's prompt.
 
 ## Status queries and diagnostics
@@ -82,7 +82,7 @@ Once collected, write `~/.claude/scheduled-jobs/<name>.md`, ad-hoc fire to verif
 
 ## Auto-update configuration
 
-Config file: `~/.claude/scheduled-jobs/.open-claude-cron.config.json`
+Config file: `~/.claude/scheduled-jobs/.clauck.config.json`
 
 Default:
 
@@ -102,7 +102,7 @@ Default:
 | `check_interval_seconds: N` | How often (in seconds) the scheduler runs the update check. 3600 = hourly. 86400 = daily. |
 | `auto_apply: true` | When a new release is detected, automatically run install.sh from the new tag. Requires network, may interrupt running jobs during the install. Security-conscious default is `false` (notify-only). |
 
-**Source of truth:** the `tag_name` of the latest GitHub Release at `https://github.com/CoreyRDean/open-claude-cron/releases/latest`. Pushes to `main` never trigger an auto-update — a maintainer must explicitly cut a Release.
+**Source of truth:** the `tag_name` of the latest GitHub Release at `https://github.com/CoreyRDean/clauck/releases/latest`. Pushes to `main` never trigger an auto-update — a maintainer must explicitly cut a Release.
 
 **Ad-hoc check:** `~/.claude/scheduled-jobs/update-check.sh` (report only) or `--apply` (install).
 
@@ -158,7 +158,7 @@ These signals aren't a lookup table. They're patterns that indicate the user wou
 
 ### How to suggest
 
-- **One sentence, as a question.** Match the energy of the conversation. Don't lecture about open-claude-cron or frontmatter.
+- **One sentence, as a question.** Match the energy of the conversation. Don't lecture about clauck or frontmatter.
 - **Include the cadence and rough cost.** *"Want me to do this every weekday morning? ~$0.20/day on Haiku."*
 - **For modifications**, name the existing job: *"Your morning-brief already runs at 8am — want me to add Sentry to it?"*
 - **If they say yes**, immediately design/modify and install. Don't ask more questions unless you genuinely need a decision (output destination, specific channel, etc.).
@@ -233,7 +233,7 @@ Decompose into multiple jobs with staggered `valid_after` / `expires_after` wind
 
 Create both jobs at once. Phase 1 runs immediately; phase 2 activates when phase 1 expires.
 
-For truly complex requests the user might describe, decompose as far as the system allows. If any requirement can't be expressed in the available frontmatter fields, be transparent: explain what you CAN do, do that, and suggest the user file a feature request at https://github.com/CoreyRDean/open-claude-cron/issues for the missing capability.
+For truly complex requests the user might describe, decompose as far as the system allows. If any requirement can't be expressed in the available frontmatter fields, be transparent: explain what you CAN do, do that, and suggest the user file a feature request at https://github.com/CoreyRDean/clauck/issues for the missing capability.
 
 ## Artifact delivery — where job outputs live
 
@@ -403,14 +403,14 @@ mkdir -p ~/Library/LaunchAgents
 Clone the repo and run the installer — it handles all file placement, LaunchAgent registration, and settings.json patching:
 
 ```bash
-git clone https://github.com/CoreyRDean/open-claude-cron /tmp/open-claude-cron-install
-bash /tmp/open-claude-cron-install/install.sh
+git clone https://github.com/CoreyRDean/clauck /tmp/clauck-install
+bash /tmp/clauck-install/install.sh
 ```
 
 Or use the one-liner from the README:
 
 ```bash
-curl -sSL https://raw.githubusercontent.com/CoreyRDean/open-claude-cron/main/install.sh | bash
+curl -sSL https://raw.githubusercontent.com/CoreyRDean/clauck/main/install.sh | bash
 ```
 
 The installer places scripts in `~/.claude/scheduled-jobs/`, the skill in `~/.claude/skills/scheduled-jobs/`, the hook in `~/.claude/hooks/`, and the LaunchAgent in `~/Library/LaunchAgents/`. After install, consider editing `~/.claude/scheduled-jobs-prompt.md` to add environment-specific durable-state guidance if useful for your jobs.

@@ -1,18 +1,18 @@
-# Contributing to open-claude-cron
+# Contributing to clauck
 
 Thanks for considering contributing. This project is young and benefits from improvements to the scheduler, new library jobs, documentation, and bug reports.
 
 ## Quick links
 
-- [Open an issue](https://github.com/CoreyRDean/open-claude-cron/issues/new/choose) for bugs, feature requests, or questions.
+- [Open an issue](https://github.com/CoreyRDean/clauck/issues/new/choose) for bugs, feature requests, or questions.
 - [SECURITY.md](SECURITY.md) for reporting vulnerabilities.
 - [Library contribution guide](#adding-a-job-to-the-library) below for submitting pre-made jobs.
 
 ## Development setup
 
 ```bash
-git clone https://github.com/CoreyRDean/open-claude-cron.git
-cd open-claude-cron
+git clone https://github.com/CoreyRDean/clauck.git
+cd clauck
 bash install.sh   # installs from local checkout (detects the repo tree)
 ```
 
@@ -53,7 +53,7 @@ The installer uses the local `lib/`, `jobs/`, and `skill/` directories when it d
 
 ## Adding a job to the library
 
-The library lives at `library/` in the repo. When users install or update open-claude-cron, the library is cached locally at `~/.claude/skills/scheduled-jobs/library/` so Claude can browse and install jobs offline.
+The library lives at `library/` in the repo. When users install or update clauck, the library is cached locally at `~/.claude/skills/scheduled-jobs/library/` so Claude can browse and install jobs offline.
 
 ### Requirements for library jobs
 

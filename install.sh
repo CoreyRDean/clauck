@@ -1,5 +1,5 @@
 #!/bin/bash
-# install.sh — open-claude-cron installer for macOS
+# install.sh — clauck installer for macOS
 #
 # Idempotent. Re-running skips steps already done.
 #
@@ -20,8 +20,8 @@ set -euo pipefail
 # Config — edit REPO_URL when forking, or set env var at install time
 # ──────────────────────────────────────────────────────────────────────────
 
-REPO_URL="${OPEN_CLAUDE_CRON_REPO:-https://github.com/CoreyRDean/open-claude-cron}"
-REPO_BRANCH="${OPEN_CLAUDE_CRON_BRANCH:-main}"
+REPO_URL="${CLAUCK_REPO:-https://github.com/CoreyRDean/clauck}"
+REPO_BRANCH="${CLAUCK_BRANCH:-main}"
 
 # ──────────────────────────────────────────────────────────────────────────
 # Flags (parsed from args)
@@ -41,8 +41,8 @@ Usage: install.sh [--dry-run] [--yes]
   --yes       Accept all defaults without prompting (for automation).
 
 Environment variables:
-  OPEN_CLAUDE_CRON_REPO     Git clone URL (default: $REPO_URL)
-  OPEN_CLAUDE_CRON_BRANCH   Branch or tag to install (default: main)
+  CLAUCK_REPO     Git clone URL (default: $REPO_URL)
+  CLAUCK_BRANCH   Branch or tag to install (default: main)
 HELP
             exit 0
             ;;
@@ -124,7 +124,7 @@ resolve_repo() {
         return 1
     fi
     local tmp
-    tmp="$(mktemp -d /tmp/open-claude-cron.XXXXXX)"
+    tmp="$(mktemp -d /tmp/clauck.XXXXXX)"
     say "Cloning $REPO_URL (branch $REPO_BRANCH) → $tmp" >&2
     if ! git clone --depth 1 --branch "$REPO_BRANCH" "$REPO_URL" "$tmp/repo" >/dev/null 2>&1; then
         fail "failed to clone $REPO_URL (branch $REPO_BRANCH)" >&2
@@ -211,6 +211,10 @@ install_files() {
     install_file "$repo/lib/run-job.sh"               "$HOME/.claude/scheduled-jobs/run-job.sh"     755
     install_file "$repo/lib/trigger-job.sh"           "$HOME/.claude/scheduled-jobs/trigger-job.sh" 755
     install_file "$repo/lib/update-check.sh"          "$HOME/.claude/scheduled-jobs/update-check.sh" 755
+
+    # Install the clauck CLI to ~/.local/bin (same location as claude CLI).
+    run mkdir -p "$HOME/.local/bin"
+    install_file "$repo/lib/clauck"                   "$HOME/.local/bin/clauck"                     755
     install_file "$repo/lib/scheduled-jobs-prompt.md" "$HOME/.claude/scheduled-jobs-prompt.md"      644
     install_file "$repo/lib/scheduled-jobs-notice.sh" "$HOME/.claude/hooks/scheduled-jobs-notice.sh" 755
 
@@ -222,7 +226,7 @@ install_files() {
 
     # Write config: respect auto-update prompt decision + persist fork URL.
     # Never overwrite an existing config — user preferences are sacrosanct.
-    local cfg_dst="$HOME/.claude/scheduled-jobs/.open-claude-cron.config.json"
+    local cfg_dst="$HOME/.claude/scheduled-jobs/.clauck.config.json"
     if [ -f "$cfg_dst" ]; then
         ok "preserving existing config: $cfg_dst"
     else
@@ -417,7 +421,7 @@ banner() {
     cat <<EOF
 
 ${C_BOLD}═══════════════════════════════════════════════════════════════${C_RESET}
-${C_OK}${C_BOLD}✓ open-claude-cron installed and verified${C_RESET}
+${C_OK}${C_BOLD}✓ clauck installed and verified${C_RESET}
 ${C_BOLD}═══════════════════════════════════════════════════════════════${C_RESET}
 
   Version         $(cat "$HOME/.claude/scheduled-jobs/.version" 2>/dev/null | tr -d '[:space:]' || echo unknown)
@@ -426,7 +430,7 @@ ${C_BOLD}═══════════════════════�
   Skill           ~/.claude/skills/scheduled-jobs/SKILL.md
   Library         ~/.claude/skills/scheduled-jobs/library/
   Hook            ~/.claude/hooks/scheduled-jobs-notice.sh
-  Config          ~/.claude/scheduled-jobs/.open-claude-cron.config.json
+  Config          ~/.claude/scheduled-jobs/.clauck.config.json
 
 ${C_BOLD}Default job installed:${C_RESET}
   heartbeat (hourly liveness check, ~\$1/month at current Haiku pricing)
@@ -444,7 +448,7 @@ ${C_BOLD}What just happened:${C_RESET}
 ${C_BOLD}Next steps:${C_RESET}
   1. Open Claude Code in any terminal. A SessionStart hook will advertise
      this system and the library to your agent.
-  2. Ask your session: ${C_BOLD}"What open-claude-cron jobs can I add from the library?"${C_RESET}
+  2. Ask your session: ${C_BOLD}"What clauck jobs can I add from the library?"${C_RESET}
      The agent will read ~/.claude/skills/scheduled-jobs/library/index.json
      and install any you pick.
   3. Or just ask: ${C_BOLD}"What can I schedule?"${C_RESET} — the agent will design a
@@ -507,7 +511,7 @@ EOF
 }
 
 main() {
-    printf "%sopen-claude-cron installer%s\n" "$C_BOLD" "$C_RESET"
+    printf "%sclauck installer%s\n" "$C_BOLD" "$C_RESET"
     [ "$DRY_RUN" -eq 1 ] && printf "  %s[DRY RUN — no files will be written]%s\n" "$C_WARN" "$C_RESET"
 
     preflight
@@ -518,7 +522,7 @@ main() {
 
     # If resolve_repo cloned into /tmp, register cleanup for when the installer exits.
     if [[ "$repo" == /tmp/* ]]; then
-        local tmproot="${repo%/repo}"  # /tmp/open-claude-cron.XXXXX
+        local tmproot="${repo%/repo}"  # /tmp/clauck.XXXXX
         trap "rm -rf '$tmproot'" EXIT
     fi
 

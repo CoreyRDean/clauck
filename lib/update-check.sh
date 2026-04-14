@@ -1,5 +1,5 @@
 #!/bin/bash
-# update-check.sh — check open-claude-cron for a newer release, optionally apply.
+# update-check.sh — check clauck for a newer release, optionally apply.
 #
 # Invoked:
 #   • Ad-hoc by user or agent (no args)                  → report only
@@ -10,7 +10,7 @@
 # repo. A push to main does NOT trigger an update — someone has to explicitly cut
 # a Release for downstream machines to see the new version.
 #
-# Config file (JSON) at: ~/.claude/scheduled-jobs/.open-claude-cron.config.json
+# Config file (JSON) at: ~/.claude/scheduled-jobs/.clauck.config.json
 #   {
 #     "auto_update": {
 #       "enabled": true,                   # auto-check enabled
@@ -34,7 +34,7 @@ set -euo pipefail
 # Repo defaults to whatever was set during installation (persisted in config file).
 # Env var override takes precedence for ad-hoc testing.
 _CONFIG_REPO=""
-_CFG="$HOME/.claude/scheduled-jobs/.open-claude-cron.config.json"
+_CFG="$HOME/.claude/scheduled-jobs/.clauck.config.json"
 if [ -f "$_CFG" ]; then
     _CONFIG_REPO=$(/usr/bin/python3 -c "
 import json, sys
@@ -42,13 +42,13 @@ try: print(json.load(open('$_CFG')).get('repo',''))
 except: pass
 " 2>/dev/null || true)
 fi
-REPO="${OPEN_CLAUDE_CRON_REPO:-${_CONFIG_REPO:-CoreyRDean/open-claude-cron}}"
+REPO="${CLAUCK_REPO:-${_CONFIG_REPO:-CoreyRDean/clauck}}"
 
 STATE_DIR="$HOME/.claude/scheduled-jobs/.state"
 VERSION_FILE="$HOME/.claude/scheduled-jobs/.version"
 AVAILABLE_FILE="$STATE_DIR/.update-available"
 LAST_CHECK_FILE="$STATE_DIR/.update-last-check"
-CONFIG_FILE="$HOME/.claude/scheduled-jobs/.open-claude-cron.config.json"
+CONFIG_FILE="$HOME/.claude/scheduled-jobs/.clauck.config.json"
 
 APPLY=0
 QUIET=0
@@ -58,7 +58,7 @@ for arg in "$@"; do
         --quiet) QUIET=1 ;;
         --help|-h)
             cat <<HELP
-update-check.sh — check open-claude-cron for a newer release.
+update-check.sh — check clauck for a newer release.
 
 Usage:
   update-check.sh              Check. Write state files. Print status.
@@ -83,7 +83,7 @@ log() { [ "$QUIET" -eq 0 ] && printf "%s\n" "$*"; }
 err() { printf "%s\n" "$*" >&2; }
 
 [ -d "$HOME/.claude/scheduled-jobs" ] \
-    || { err "open-claude-cron is not installed at ~/.claude/scheduled-jobs"; exit 2; }
+    || { err "clauck is not installed at ~/.claude/scheduled-jobs"; exit 2; }
 mkdir -p "$STATE_DIR"
 
 # ──────────────────────────────────────────────────────────────────────────
@@ -171,10 +171,10 @@ fi
 
 log "applying update $INSTALLED → $LATEST_TAG ..."
 # Fetch install.sh from main HEAD (always has the latest bug fixes for the
-# install process itself). The OPEN_CLAUDE_CRON_BRANCH env var tells the
+# install process itself). The CLAUCK_BRANCH env var tells the
 # installer to clone the release TAG for the actual payload files.
 INSTALLER_URL="https://raw.githubusercontent.com/$REPO/main/install.sh"
-TMP_INSTALLER="$(mktemp /tmp/open-claude-cron-install.XXXXXX.sh)"
+TMP_INSTALLER="$(mktemp /tmp/clauck-install.XXXXXX.sh)"
 trap 'rm -f "$TMP_INSTALLER"' EXIT
 
 if ! curl -fsSL --max-time 30 "$INSTALLER_URL" -o "$TMP_INSTALLER"; then
@@ -184,7 +184,7 @@ fi
 
 # Pass --yes so the installer doesn't prompt (we're non-interactive),
 # and the branch env var so it clones the release tag, not main.
-if OPEN_CLAUDE_CRON_BRANCH="$LATEST_TAG" bash "$TMP_INSTALLER" --yes; then
+if CLAUCK_BRANCH="$LATEST_TAG" bash "$TMP_INSTALLER" --yes; then
     rm -f "$AVAILABLE_FILE"
     log "✓ update applied; now on $LATEST_TAG"
     exit 0

@@ -1,6 +1,6 @@
 # Changelog
 
-All notable changes to open-claude-cron are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+All notable changes to clauck are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
@@ -26,7 +26,7 @@ Nothing yet.
 - **Pre-made job library** with curated jobs cached locally for offline browsing:
   - `verification/daily-verify.md` — daily MCP-surface health check.
   - `organization/downloads-triage.md` — file_added trigger on `~/Downloads`.
-- **Auto-update system:** checks GitHub Releases hourly (configurable via `~/.claude/scheduled-jobs/.open-claude-cron.config.json`); notify-only by default; opt-in auto-apply.
+- **Auto-update system:** checks GitHub Releases hourly (configurable via `~/.claude/scheduled-jobs/.clauck.config.json`); notify-only by default; opt-in auto-apply.
 - **Default heartbeat job:** hourly, Haiku, minimal surface (`strict_mcp_config: true` + `setting_sources: ""`), ~$0.04/run (~$1/month).
 - **Idempotent installer** (`install.sh`) with preflight checks, interactive confirmation, end-to-end verification via heartbeat fire, and a success banner with next steps.
 - **Clean uninstaller** (`uninstall.sh`) that preserves user job files by default; `--wipe` for full removal.
@@ -39,5 +39,5 @@ Nothing yet.
 - Source of truth for updates: GitHub Releases only. Pushes to `main` never trigger updates.
 - Fork users install from their fork's URL and update checks target their fork — no backdoor from the upstream repo.
 
-[Unreleased]: https://github.com/CoreyRDean/open-claude-cron/compare/v0.1.0...HEAD
-[v0.1.0]: https://github.com/CoreyRDean/open-claude-cron/releases/tag/v0.1.0
+[Unreleased]: https://github.com/CoreyRDean/clauck/compare/v0.1.0...HEAD
+[v0.1.0]: https://github.com/CoreyRDean/clauck/releases/tag/v0.1.0

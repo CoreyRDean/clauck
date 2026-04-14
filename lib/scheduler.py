@@ -36,7 +36,7 @@ GLOBAL_PROMPT = HOME / ".claude" / "scheduled-jobs-prompt.md"
 MANIFEST_PATH = JOBS_DIR / ".manifest.json"
 RUN_JOB = JOBS_DIR / "run-job.sh"
 UPDATE_CHECK = JOBS_DIR / "update-check.sh"
-CONFIG_PATH = JOBS_DIR / ".open-claude-cron.config.json"
+CONFIG_PATH = JOBS_DIR / ".clauck.config.json"
 UPDATE_LAST_CHECK = STATE_DIR / ".update-last-check"
 
 # Files with these stems are skipped even if they live in jobs dir.
@@ -608,7 +608,7 @@ def fire(job: dict, trigger: str = "scheduled") -> None:
 
 
 def load_config() -> dict:
-    """Read ~/.claude/scheduled-jobs/.open-claude-cron.config.json.
+    """Read ~/.claude/scheduled-jobs/.clauck.config.json.
 
     Returns defaults (auto-check enabled, hourly, no auto-apply) if the file
     is absent or unparseable. The installer ships a default config file so

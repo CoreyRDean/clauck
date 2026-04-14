@@ -17,7 +17,7 @@ What should have happened instead.
 **Environment**
 - macOS version: (`sw_vers -productVersion`)
 - Claude CLI version: (`claude --version`)
-- open-claude-cron version: (`cat ~/.claude/scheduled-jobs/.version`)
+- clauck version: (`cat ~/.claude/scheduled-jobs/.version`)
 - Python version: (`/usr/bin/python3 --version`)
 
 **Relevant logs** (if applicable)

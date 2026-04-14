@@ -1,6 +1,6 @@
-# open-claude-cron — Agent Instructions
+# clauck — Agent Instructions
 
-You are working inside the `open-claude-cron` repository. This is a macOS launchd-based system that runs `claude -p` sessions on cron schedules and event triggers. Users install it via a one-liner shell command.
+You are working inside the `clauck` repository. This is a macOS launchd-based system that runs `claude -p` sessions on cron schedules and event triggers. Users install it via a one-liner shell command.
 
 ## What this repo contains
 
@@ -67,9 +67,9 @@ This runs the installer against YOUR local checkout — no network clone. Change
 
 ## How to help a user install this system
 
-If a user asks you to install open-claude-cron:
+If a user asks you to install clauck:
 
-1. Run the installer: `curl -sSL https://raw.githubusercontent.com/CoreyRDean/open-claude-cron/main/install.sh | bash`
+1. Run the installer: `curl -sSL https://raw.githubusercontent.com/CoreyRDean/clauck/main/install.sh | bash`
 2. The installer handles everything: preflight, file placement, LaunchAgent, settings.json hook, verification.
 3. After install, read `~/.claude/skills/scheduled-jobs/SKILL.md` for the full management playbook.
 4. Browse the library: `cat ~/.claude/skills/scheduled-jobs/library/index.json | python3 -m json.tool`
@@ -88,7 +88,8 @@ If a user asks you to install open-claude-cron:
 | Per-run logs | `~/.claude/scheduled-jobs/<name>-<utc-ts>-<pid>.log` |
 | Manifest | `~/.claude/scheduled-jobs/.manifest.json` |
 | State dir | `~/.claude/scheduled-jobs/.state/` |
-| Config | `~/.claude/scheduled-jobs/.open-claude-cron.config.json` |
+| Config | `~/.claude/scheduled-jobs/.clauck.config.json` |
+| CLI tool | `~/.local/bin/clauck` |
 | Version | `~/.claude/scheduled-jobs/.version` |
 | Skill | `~/.claude/skills/scheduled-jobs/SKILL.md` |
 | Library | `~/.claude/skills/scheduled-jobs/library/` |

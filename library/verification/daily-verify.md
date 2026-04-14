@@ -28,7 +28,7 @@ Post a daily verification message via one of your configured MCPs.
 - **Slack DM to yourself:** call `slack_send_message` with `channel_id=<TODO: your Slack DM channel ID, e.g. D0XXXXXX>`. Thread under a root message titled `Scheduled daily-verify — launchd`; search for it first, create it if missing.
 - **Discord DM:** use the Discord MCP.
 - **Jira ticket:** append a comment to `<TODO: ticket key>`.
-- **Email:** use the Gmail MCP to send to yourself with subject `open-claude-cron daily-verify`.
+- **Email:** use the Gmail MCP to send to yourself with subject `clauck daily-verify`.
 - **Local file only:** append to `~/.claude/scheduled-jobs/daily-verify-feed.md`. No MCP needed; you lose external visibility but removes the MCP-surface cost floor (drops to ~$0.04 like heartbeat).
 
 **Post body (one line per bullet, no preamble, no trailing text):**

@@ -11,13 +11,13 @@
 
 **Do not open a public issue for security vulnerabilities.**
 
-Instead, use [GitHub's private security advisory feature](https://github.com/CoreyRDean/open-claude-cron/security/advisories/new) to report the vulnerability. You'll receive a response within 72 hours.
+Instead, use [GitHub's private security advisory feature](https://github.com/CoreyRDean/clauck/security/advisories/new) to report the vulnerability. You'll receive a response within 72 hours.
 
 If you're unable to use GitHub advisories, email the maintainer directly (see the GitHub profile for contact info).
 
 ## Threat model
 
-open-claude-cron runs `claude -p` sessions with `--dangerously-skip-permissions` under a launchd LaunchAgent. This means:
+clauck runs `claude -p` sessions with `--dangerously-skip-permissions` under a launchd LaunchAgent. This means:
 
 - **Job prompts have full CLI access** to everything the installing user's account can reach. A malicious or poorly-written job prompt can read, write, or delete files, make network requests, and interact with any MCP the user has configured.
 - **The scheduler runs every 60 seconds.** A compromised `scheduler.py` or `run-job.sh` executes on that cadence.
@@ -41,4 +41,4 @@ open-claude-cron runs `claude -p` sessions with `--dangerously-skip-permissions`
 
 ## Scope
 
-This policy covers the open-claude-cron codebase (`install.sh`, `scheduler.py`, `run-job.sh`, `trigger-job.sh`, `update-check.sh`, the skill, and the library). It does not cover the Claude CLI itself, Claude's model behavior, or MCP server implementations.
+This policy covers the clauck codebase (`install.sh`, `scheduler.py`, `run-job.sh`, `trigger-job.sh`, `update-check.sh`, the skill, and the library). It does not cover the Claude CLI itself, Claude's model behavior, or MCP server implementations.

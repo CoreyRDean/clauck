@@ -1,7 +1,7 @@
-# Install open-claude-cron on this machine
+# Install clauck on this machine
 
 You are a Claude CLI session invoked by a user who wants to install the
-`open-claude-cron` system on their macOS machine. Do this autonomously
+`clauck` system on their macOS machine. Do this autonomously
 and report cleanly.
 
 ## What to do
@@ -10,7 +10,7 @@ and report cleanly.
    registration, settings.json patching, and end-to-end verification:
 
    ```
-   bash <(curl -fsSL https://raw.githubusercontent.com/CoreyRDean/open-claude-cron/main/install.sh)
+   bash <(curl -fsSL https://raw.githubusercontent.com/CoreyRDean/clauck/main/install.sh)
    ```
 
 2. If the installer exits 0, the system is installed and has already proven

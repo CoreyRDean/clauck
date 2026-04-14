@@ -1,0 +1,355 @@
+#!/usr/bin/env python3
+"""clauck — CLI for managing scheduled claude jobs.
+
+Usage:
+    clauck list                          Show all jobs with status
+    clauck status                        System overview
+    clauck fire <name>                   Ad-hoc trigger a job
+    clauck pause <name>                  Disable a job (keeps in manifest)
+    clauck resume <name>                 Re-enable a paused/auto-disabled job
+    clauck logs <name> [--last N]        Show recent logs for a job
+    clauck next <name>                   Show when a job fires next
+    clauck library                       Browse pre-made jobs
+    clauck install <library-job>         Copy a library job into scheduled-jobs
+    clauck update                        Check for new version
+    clauck update --apply                Apply available update
+    clauck config                        Show current config
+    clauck config set <key> <value>      Set a config value
+    clauck version                       Show installed version
+
+All operations are local and deterministic — no LLM invocations.
+For natural-language management, use the scheduled-jobs skill in a Claude session.
+"""
+
+from __future__ import annotations
+
+import json
+import os
+import subprocess
+import sys
+from datetime import datetime, timezone
+from pathlib import Path
+
+HOME = Path(os.environ.get("HOME", str(Path.home())))
+JOBS_DIR = HOME / ".claude" / "scheduled-jobs"
+STATE_DIR = JOBS_DIR / ".state"
+MANIFEST = JOBS_DIR / ".manifest.json"
+VERSION_FILE = JOBS_DIR / ".version"
+CONFIG_FILE = JOBS_DIR / ".clauck.config.json"
+TRIGGER_SCRIPT = JOBS_DIR / "trigger-job.sh"
+UPDATE_SCRIPT = JOBS_DIR / "update-check.sh"
+LIBRARY_DIR = HOME / ".claude" / "skills" / "scheduled-jobs" / "library"
+
+
+# ── helpers ──────────────────────────────────────────────────────────────
+
+def die(msg: str) -> None:
+    print(f"error: {msg}", file=sys.stderr)
+    sys.exit(1)
+
+
+def load_manifest() -> dict:
+    if not MANIFEST.exists():
+        die("manifest not found — is clauck installed?")
+    return json.loads(MANIFEST.read_text())
+
+
+def load_config() -> dict:
+    if CONFIG_FILE.exists():
+        try:
+            return json.loads(CONFIG_FILE.read_text())
+        except (OSError, ValueError):
+            return {}
+    return {}
+
+
+def job_state(name: str) -> dict:
+    """Collect state info for a single job."""
+    info: dict = {}
+    lr = STATE_DIR / f"{name}.last-run"
+    if lr.exists():
+        try:
+            ts = int(lr.read_text().strip())
+            info["last_run"] = datetime.fromtimestamp(ts).isoformat()
+        except (OSError, ValueError):
+            pass
+    ad = STATE_DIR / f"{name}.auto-disabled"
+    if ad.exists():
+        try:
+            info["auto_disabled"] = json.loads(ad.read_text())
+        except (OSError, ValueError):
+            info["auto_disabled"] = True
+    rr = STATE_DIR / f"{name}.runs-remaining"
+    if rr.exists():
+        try:
+            info["runs_remaining"] = int(rr.read_text().strip())
+        except (OSError, ValueError):
+            pass
+    sid = STATE_DIR / f"{name}.session-id"
+    if sid.exists():
+        info["session_id"] = sid.read_text().strip()
+    return info
+
+
+# ── commands ─────────────────────────────────────────────────────────────
+
+def cmd_list() -> None:
+    m = load_manifest()
+    jobs = m.get("jobs", [])
+    if not jobs:
+        print("No jobs registered.")
+        return
+    for j in jobs:
+        name = j["name"]
+        cron = j.get("cron") or "(no cron)"
+        desc = j.get("description", "")[:60]
+        disabled = j.get("disabled", False)
+        state = job_state(name)
+
+        status = "active"
+        if disabled:
+            status = "paused"
+        elif state.get("auto_disabled"):
+            reason = ""
+            if isinstance(state["auto_disabled"], dict):
+                reason = f" ({state['auto_disabled'].get('reason', '')})"
+            status = f"auto-disabled{reason}"
+
+        extra = ""
+        if "runs_remaining" in state:
+            extra += f"  runs left: {state['runs_remaining']}"
+        if "last_run" in state:
+            extra += f"  last: {state['last_run']}"
+
+        print(f"  {name:<25} {cron:<20} [{status}]")
+        if desc:
+            print(f"    {desc}")
+        if extra:
+            print(f"   {extra}")
+
+
+def cmd_status() -> None:
+    version = VERSION_FILE.read_text().strip() if VERSION_FILE.exists() else "unknown"
+    config = load_config()
+
+    # Check if scheduler is loaded
+    result = subprocess.run(
+        ["launchctl", "list"],
+        capture_output=True, text=True,
+    )
+    scheduler_running = "claude-scheduler" in result.stdout
+
+    m = load_manifest() if MANIFEST.exists() else {"jobs": []}
+    job_count = len(m.get("jobs", []))
+
+    # Count logs
+    log_count = len(list(JOBS_DIR.glob("*-[0-9]*.log")))
+
+    auto_update = config.get("auto_update", {})
+    repo = config.get("repo", "CoreyRDean/clauck")
+
+    print(f"  clauck {version}")
+    print(f"  scheduler: {'running' if scheduler_running else 'NOT RUNNING'}")
+    print(f"  jobs: {job_count}")
+    print(f"  logs: {log_count}")
+    print(f"  repo: {repo}")
+    print(f"  auto-update: {'enabled' if auto_update.get('enabled', True) else 'disabled'}"
+          f" (auto-apply: {'on' if auto_update.get('auto_apply', False) else 'off'})")
+
+    # Check for pending update
+    available = STATE_DIR / ".update-available"
+    if available.exists():
+        try:
+            upd = json.loads(available.read_text())
+            print(f"  UPDATE AVAILABLE: {upd.get('installed')} → {upd.get('latest')}")
+        except (OSError, ValueError):
+            pass
+
+
+def cmd_fire(name: str) -> None:
+    if not TRIGGER_SCRIPT.exists():
+        die("trigger-job.sh not found")
+    result = subprocess.run([str(TRIGGER_SCRIPT), name], capture_output=True, text=True)
+    print(result.stdout.strip())
+    if result.returncode != 0:
+        print(result.stderr.strip(), file=sys.stderr)
+        sys.exit(result.returncode)
+
+
+def cmd_pause(name: str) -> None:
+    STATE_DIR.mkdir(parents=True, exist_ok=True)
+    (STATE_DIR / f"{name}.auto-disabled").write_text(
+        json.dumps({"reason": "paused via clauck CLI", "at": datetime.now(timezone.utc).isoformat()})
+    )
+    print(f"  paused: {name}")
+
+
+def cmd_resume(name: str) -> None:
+    ad = STATE_DIR / f"{name}.auto-disabled"
+    if ad.exists():
+        ad.unlink()
+        print(f"  resumed: {name}")
+    else:
+        print(f"  {name} is not paused/auto-disabled")
+    # Also reset runs-remaining if max_runs was exhausted
+    rr = STATE_DIR / f"{name}.runs-remaining"
+    if rr.exists():
+        rr.unlink()
+        print(f"  reset runs counter for: {name}")
+
+
+def cmd_logs(name: str, last: int = 5) -> None:
+    pattern = f"{name}-[0-9]*.log"
+    logs = sorted(JOBS_DIR.glob(pattern), key=lambda p: p.stat().st_mtime, reverse=True)
+    if not logs:
+        print(f"  no logs found for: {name}")
+        return
+    for log in logs[:last]:
+        # Extract key info from log
+        text = log.read_text()
+        exit_line = ""
+        cost = ""
+        for line in text.splitlines():
+            if "exit_code=" in line:
+                exit_line = line.strip()
+            if '"total_cost_usd"' in line:
+                import re
+                m = re.search(r'"total_cost_usd":([\d.]+)', line)
+                if m:
+                    cost = f"${float(m.group(1)):.4f}"
+        ts = log.stem.split("-", 1)[1] if "-" in log.stem else "?"
+        print(f"  {ts:<30} {exit_line:<25} {cost}")
+
+
+def cmd_library() -> None:
+    index_file = LIBRARY_DIR / "index.json"
+    if not index_file.exists():
+        die("library not found — run the installer to populate it")
+    index = json.loads(index_file.read_text())
+    for j in index.get("jobs", []):
+        installed = (JOBS_DIR / f"{j['name']}.md").exists()
+        marker = " [installed]" if installed else ""
+        print(f"  {j['name']:<25} {j.get('schedule', ''):<35} ~${j.get('cost_per_run_usd_approx', '?')}/run{marker}")
+        print(f"    {j.get('one_line', '')}")
+
+
+def cmd_install_library(name: str) -> None:
+    index_file = LIBRARY_DIR / "index.json"
+    if not index_file.exists():
+        die("library not found")
+    index = json.loads(index_file.read_text())
+    match = [j for j in index.get("jobs", []) if j["name"] == name]
+    if not match:
+        die(f"no library job named '{name}'. Run `clauck library` to see available jobs.")
+    job = match[0]
+    src = LIBRARY_DIR / job["path"]
+    if not src.exists():
+        die(f"library file missing: {src}")
+    dst = JOBS_DIR / f"{name}.md"
+    if dst.exists():
+        die(f"job already exists: {dst}. Remove it first or edit directly.")
+    import shutil
+    shutil.copy2(str(src), str(dst))
+    print(f"  installed: {dst}")
+    setup = job.get("requires", {}).get("setup", [])
+    if setup:
+        print(f"  CUSTOMIZE BEFORE FIRST RUN:")
+        for step in setup:
+            print(f"    - {step}")
+    print(f"  test: clauck fire {name}")
+
+
+def cmd_update(apply: bool = False) -> None:
+    if not UPDATE_SCRIPT.exists():
+        die("update-check.sh not found")
+    args = [str(UPDATE_SCRIPT)]
+    if apply:
+        args.append("--apply")
+    os.execvp(args[0], args)
+
+
+def cmd_config(args: list[str]) -> None:
+    if not args or args[0] != "set":
+        config = load_config()
+        print(json.dumps(config, indent=2))
+        return
+    # clauck config set <dotted.key> <value>
+    if len(args) < 3:
+        die("usage: clauck config set <key> <value>")
+    key_path = args[1].split(".")
+    value = args[2]
+    # Coerce value
+    if value.lower() == "true":
+        value = True
+    elif value.lower() == "false":
+        value = False
+    else:
+        try:
+            value = int(value)
+        except ValueError:
+            try:
+                value = float(value)
+            except ValueError:
+                pass
+    config = load_config()
+    # Navigate to the nested key
+    d = config
+    for k in key_path[:-1]:
+        d = d.setdefault(k, {})
+    d[key_path[-1]] = value
+    CONFIG_FILE.write_text(json.dumps(config, indent=2) + "\n")
+    print(f"  set {args[1]} = {value}")
+
+
+def cmd_version() -> None:
+    v = VERSION_FILE.read_text().strip() if VERSION_FILE.exists() else "unknown"
+    print(f"clauck {v}")
+
+
+# ── main ─────────────────────────────────────────────────────────────────
+
+def main() -> None:
+    args = sys.argv[1:]
+    if not args or args[0] in ("-h", "--help", "help"):
+        print(__doc__.strip())
+        sys.exit(0)
+
+    cmd = args[0]
+    rest = args[1:]
+
+    if cmd == "list":
+        cmd_list()
+    elif cmd == "status":
+        cmd_status()
+    elif cmd == "fire" and rest:
+        cmd_fire(rest[0])
+    elif cmd == "pause" and rest:
+        cmd_pause(rest[0])
+    elif cmd == "resume" and rest:
+        cmd_resume(rest[0])
+    elif cmd == "logs" and rest:
+        last = 5
+        if "--last" in rest:
+            idx = rest.index("--last")
+            if idx + 1 < len(rest):
+                last = int(rest[idx + 1])
+            rest = [r for i, r in enumerate(rest) if i != idx and i != idx + 1]
+        cmd_logs(rest[0], last)
+    elif cmd == "library":
+        cmd_library()
+    elif cmd == "install" and rest:
+        cmd_install_library(rest[0])
+    elif cmd == "update":
+        cmd_update(apply="--apply" in rest)
+    elif cmd == "config":
+        cmd_config(rest)
+    elif cmd == "version":
+        cmd_version()
+    else:
+        print(f"unknown command: {cmd}", file=sys.stderr)
+        print("run `clauck --help` for usage", file=sys.stderr)
+        sys.exit(1)
+
+
+if __name__ == "__main__":
+    main()
