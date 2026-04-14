@@ -13,7 +13,9 @@ Usage:
     clauck install <library-job>         Install from library
     clauck update [--apply]              Check for / apply updates
     clauck config [set <key> <value>]    Show or edit config
+    clauck doctor [-i|--interactive]     Diagnose system health
     clauck version                       Show version
+    clauck work <text>                   Explicit semantic command (alias)
     clauck <anything else>               Natural-language command (uses Claude)
 
 Examples:
@@ -45,7 +47,7 @@ LIBRARY_DIR = HOME / ".claude" / "skills" / "scheduled-jobs" / "library"
 
 KNOWN_COMMANDS = {
     "list", "status", "fire", "pause", "resume", "edit", "logs",
-    "library", "install", "update", "config", "version",
+    "library", "install", "update", "config", "version", "doctor", "work",
     "-h", "--help", "help",
 }
 
@@ -389,20 +391,89 @@ def cmd_version() -> None:
     print(f"clauck {v}")
 
 
+def cmd_doctor(interactive: bool = False) -> None:
+    """Spawn a clauck-work diagnostic session."""
+    claude_bin = _find_claude()
+    if not claude_bin:
+        die("claude CLI not found")
+
+    prompt = """Diagnose the clauck scheduled-jobs system on this machine.
+
+Check in order:
+1. Is the LaunchAgent loaded? (`launchctl list | grep claude-scheduler`)
+2. Is scheduler.py producing output? (`tail ~/.claude/scheduled-jobs/.scheduler-stderr.log`)
+3. Is the manifest fresh? (check .manifest.json mtime vs now)
+4. Are any jobs auto-disabled unexpectedly? (check .state/*.auto-disabled)
+5. Are any jobs failing? (scan recent logs for non-zero exit codes)
+6. Is the update check working? (check .state/.update-last-check)
+7. Any frontmatter parse errors in job files?
+
+For each issue found: explain the root cause, attempt a fix if safe, report what you did.
+For issues needing user input: explain what's needed and how to fix it.
+If everything is healthy, say so concisely."""
+
+    if interactive:
+        # Run diagnostic, then open interactive session for follow-up
+        result = subprocess.run(
+            [claude_bin, "-p", prompt,
+             "--append-system-prompt", f"You are clauck doctor. Jobs dir: {JOBS_DIR}. State: {STATE_DIR}. Manifest: {MANIFEST}.",
+             "--dangerously-skip-permissions",
+             "--max-turns", "15", "--max-budget-usd", "0.50",
+             "--model", "sonnet", "--output-format", "text",
+             "--setting-sources", ""],
+            capture_output=True, text=True,
+        )
+        print(result.stdout.strip())
+        # Get session ID for interactive follow-up
+        # Re-run with json to capture session_id
+        result_json = subprocess.run(
+            [claude_bin, "-p", "Summarize what you found in one line.",
+             "--append-system-prompt", f"You are clauck doctor. Jobs dir: {JOBS_DIR}.",
+             "--dangerously-skip-permissions",
+             "--max-turns", "1", "--max-budget-usd", "0.05",
+             "--model", "haiku", "--output-format", "json",
+             "--setting-sources", ""],
+            capture_output=True, text=True,
+        )
+        try:
+            sid = json.loads(result_json.stdout).get("session_id", "")
+            if sid:
+                print(f"\n  Opening interactive session for follow-up...")
+                os.execvp(claude_bin, [claude_bin, "--resume", sid])
+        except (json.JSONDecodeError, KeyError):
+            pass
+    else:
+        result = subprocess.run(
+            [claude_bin, "-p", prompt,
+             "--append-system-prompt", f"You are clauck doctor. Jobs dir: {JOBS_DIR}. State: {STATE_DIR}. Manifest: {MANIFEST}.",
+             "--dangerously-skip-permissions",
+             "--max-turns", "15", "--max-budget-usd", "0.50",
+             "--model", "sonnet", "--output-format", "text",
+             "--setting-sources", ""],
+            capture_output=True, text=True,
+        )
+        if result.stdout.strip():
+            print(result.stdout.strip())
+        if result.returncode != 0 and result.stderr.strip():
+            print(result.stderr.strip(), file=sys.stderr)
+
+
+def _find_claude() -> str | None:
+    """Locate the claude binary."""
+    for p in [HOME / ".local" / "bin" / "claude", Path("/usr/local/bin/claude")]:
+        if p.exists():
+            return str(p)
+    import shutil
+    return shutil.which("claude")
+
+
 def cmd_semantic(text: str) -> None:
     """Pass natural-language text to Claude for execution against clauck.
 
     Spawns `claude -p` with a system prompt scoping it to clauck operations.
     The user sees only the result — no indication that an LLM is involved.
     """
-    claude_bin = None
-    for p in [HOME / ".local" / "bin" / "claude", Path("/usr/local/bin/claude")]:
-        if p.exists():
-            claude_bin = str(p)
-            break
-    if not claude_bin:
-        import shutil
-        claude_bin = shutil.which("claude")
+    claude_bin = _find_claude()
     if not claude_bin:
         die("claude CLI not found — semantic commands require claude on PATH")
 
@@ -487,6 +558,12 @@ def main() -> None:
         cmd_config(rest)
     elif cmd == "version":
         cmd_version()
+    elif cmd == "doctor":
+        cmd_doctor(interactive=("-i" in rest or "--interactive" in rest))
+    elif cmd == "work":
+        # `clauck work <text>` is an explicit alias for semantic fallthrough,
+        # avoiding conflicts if semantic text starts with a subcommand name.
+        cmd_semantic(" ".join(rest) if rest else "show system status")
     elif cmd not in KNOWN_COMMANDS:
         # Semantic fallthrough: anything that isn't a known command is treated
         # as natural-language input for Claude to interpret as a clauck operation.

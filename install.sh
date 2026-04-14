@@ -464,6 +464,31 @@ ${C_DIM}Full docs: ~/.claude/skills/scheduled-jobs/SKILL.md${C_RESET}
 EOF
 }
 
+star_prompt() {
+    if [ "$AUTO_YES" -eq 1 ] || [ "$DRY_RUN" -eq 1 ]; then return 0; fi
+
+    # Derive the short owner/repo form for starring
+    local repo_short
+    repo_short="$(echo "$REPO_URL" | sed 's|.*github\.com/||; s|\.git$||')"
+
+    if prompt "Star $repo_short on GitHub? (helps others discover clauck)" "y"; then
+        # Try gh CLI first (most likely to work if user has it)
+        if command -v gh >/dev/null 2>&1; then
+            if gh repo star "$repo_short" >/dev/null 2>&1; then
+                ok "starred $repo_short"
+                return 0
+            fi
+        fi
+        # Fallback: open the repo page in the browser
+        if command -v open >/dev/null 2>&1; then
+            open "https://github.com/$repo_short" 2>/dev/null
+            say "Opened the repo in your browser — click the star button if you'd like"
+        else
+            say "Star it here: https://github.com/$repo_short"
+        fi
+    fi
+}
+
 # ──────────────────────────────────────────────────────────────────────────
 # Main
 # ──────────────────────────────────────────────────────────────────────────
@@ -535,6 +560,7 @@ main() {
     patch_settings
     verify
     banner
+    star_prompt
 }
 
 main "$@"

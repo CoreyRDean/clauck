@@ -1,6 +1,15 @@
-# clauck
+# clauck — your agent, on the clock
 
-**Your agent, on the clock.** Morning digests before you open Slack. PR reviews while you sleep. File triage when downloads land. Reminders that actually do the thing, not just tell you about it.
+[![CI](https://github.com/CoreyRDean/clauck/actions/workflows/ci.yml/badge.svg)](https://github.com/CoreyRDean/clauck/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/CoreyRDean/clauck?include_prereleases)](https://github.com/CoreyRDean/clauck/releases/latest)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![macOS](https://img.shields.io/badge/platform-macOS-lightgrey)](https://github.com/CoreyRDean/clauck)
+[![Claude Code](https://img.shields.io/badge/requires-Claude_Code-orange)](https://claude.ai/code)
+
+<!-- TODO: Replace with a real banner image hosted on the repo or clauck.com -->
+<!-- ![clauck banner](assets/banner.png) -->
+
+Morning digests before you open Slack. PR reviews while you sleep. File triage when downloads land. Reminders that actually do the thing, not just tell you about it.
 
 > **Hey Claude, install clauck**
 
