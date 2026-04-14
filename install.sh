@@ -105,6 +105,9 @@ run() {
 # ──────────────────────────────────────────────────────────────────────────
 
 resolve_repo() {
+    # NOTE: this function is called inside a command substitution — it runs in
+    # a subshell. Do NOT set EXIT traps here (they fire when the subshell exits,
+    # deleting files before the parent can use them). Cleanup is handled in main().
     local script_dir=""
     if [ -n "${BASH_SOURCE[0]:-}" ] && [ "${BASH_SOURCE[0]}" != "bash" ]; then
         script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd)"
@@ -113,17 +116,15 @@ resolve_repo() {
         echo "$script_dir"
         return 0
     fi
-    # Piped install → clone.
-    command -v git >/dev/null 2>&1 || die "git not found — install Xcode Command Line Tools (xcode-select --install)" 1
+    # Piped install → clone into a temp dir.
+    command -v git >/dev/null 2>&1 || { fail "git not found — install Xcode Command Line Tools (xcode-select --install)" >&2; return 1; }
     local tmp
     tmp="$(mktemp -d /tmp/open-claude-cron.XXXXXX)"
-    # send to stderr — stdout is captured by the `repo="$(resolve_repo)"` caller.
     say "Cloning $REPO_URL (branch $REPO_BRANCH) → $tmp" >&2
-    git clone --depth 1 --branch "$REPO_BRANCH" "$REPO_URL" "$tmp/repo" >/dev/null 2>&1 \
-        || die "failed to clone $REPO_URL" 1
-    # Register cleanup
-    _INSTALL_TMPDIR="$tmp"
-    trap '[ -n "${_INSTALL_TMPDIR:-}" ] && rm -rf "$_INSTALL_TMPDIR"' EXIT
+    if ! git clone --depth 1 --branch "$REPO_BRANCH" "$REPO_URL" "$tmp/repo" >/dev/null 2>&1; then
+        fail "failed to clone $REPO_URL (branch $REPO_BRANCH)" >&2
+        return 1
+    fi
     echo "$tmp/repo"
 }
 
@@ -507,8 +508,14 @@ main() {
     preflight
 
     local repo
-    repo="$(resolve_repo)"
+    repo="$(resolve_repo)" || die "could not locate repo source" 1
     ok "source: $repo"
+
+    # If resolve_repo cloned into /tmp, register cleanup for when the installer exits.
+    if [[ "$repo" == /tmp/* ]]; then
+        local tmproot="${repo%/repo}"  # /tmp/open-claude-cron.XXXXX
+        trap "rm -rf '$tmproot'" EXIT
+    fi
 
     confirm_plan "$repo"
     prompt_auto_update
