@@ -23,6 +23,12 @@ When the user asks something in this list, follow the playbook — don't improvi
 | "Apply the update" | Run `~/.claude/scheduled-jobs/update-check.sh --apply`. The installer re-runs against the release tag; verify the heartbeat still fires after. |
 | "Disable auto-updates" / "Change update frequency" | Edit `~/.claude/scheduled-jobs/.open-claude-cron.config.json`. See **Auto-update configuration** below. |
 | "Why isn't job X firing?" / "It broke" | See **Diagnosing failures** section. Walk the hierarchy: launchd loaded? last-run state? preflight log? JSON envelope. |
+| "Do this once at [time]" / "Run this tomorrow at 9am" | Set `cron` to match the target time + `run_once: true`. Explain it fires once then auto-disables. |
+| "Do this for the next N days/times" | Set `cron` + `max_runs: N`. Or `cron` + `expires_after: <date>`. Pick whichever is more natural for the request. |
+| "Start this after [date]" | Set `valid_after: "<ISO date>"`. Scheduler silently skips until then. |
+| "Do this until [date]" | Set `expires_after: "<ISO date>"`. Auto-disables after that. |
+| Complex multi-phase temporal request | Decompose into multiple jobs with staggered `valid_after`/`expires_after` windows. See **Temporal scheduling** section. |
+| "Turn this URL into a scheduled job" | Fetch the URL, identify the repeatable intent, design the prompt. See **Crafting jobs from external sources**. |
 | "Remove job X" | `rm ~/.claude/scheduled-jobs/<name>.md` + clean state. Ask first — this is destructive. |
 | "Uninstall the whole thing" | Point them at the uninstall.sh one-liner. Note that jobs/logs are preserved by default (use `--wipe` for full removal). Ask before running. |
 
@@ -83,6 +89,137 @@ Default:
 **Ad-hoc check:** `~/.claude/scheduled-jobs/update-check.sh` (report only) or `--apply` (install).
 
 When an update is detected, the SessionStart hook surfaces this at the top of future Claude sessions, so the user sees the notification without having to check manually.
+
+## Crafting jobs from external sources (3rd-party URLs, raw intent)
+
+When the user says something like *"Claude, install this as a job: https://example.com/my-workflow"* or *"Claude, turn this into a daily job: [paste of raw text]"*:
+
+1. **Fetch/read the source material.** Use WebFetch for URLs, or read pasted text directly.
+2. **Identify the repeatable intent.** What is the core action that should happen each run? Strip the one-time setup instructions, keep the recurring work.
+3. **Design the prompt** using the same principles as "Designing a new job": cron/trigger, output destination, cost tier, idempotency plan. Aim for the minimum turns + tokens that accomplish the intent.
+4. **Write the `.md` file**, ad-hoc fire to verify, report cost and schedule.
+
+The user does NOT need to understand frontmatter or cron. They provide intent + source material; you produce an optimized job.
+
+## Proactive job suggestions
+
+**You should actively look for opportunities to suggest scheduled jobs during normal conversation.** This is not a passive skill — it should trigger whenever you detect a pattern that would benefit from repetition.
+
+### Signals to watch for
+
+| Signal | Suggested action |
+|---|---|
+| User searches for something that changes over time (news, prices, social feeds, repo activity) | *"Want me to check this again tomorrow? I can set up a daily job."* |
+| User asks you to summarize a channel, inbox, or feed | *"I can do this every morning automatically. Want me to set it up?"* |
+| User has a recurring calendar event (standup, retro, 1:1) | *"Want me to prepare a brief for this meeting going forward? I'd run it 30 minutes before each occurrence."* |
+| User asks for a status check on something (CI, deploy, PR, service health) | *"I can monitor this on a schedule and alert you if something changes."* |
+| User does manual cleanup, triage, or review work | *"This seems like something that would be useful on repeat. Want a weekly version?"* |
+| User creates or modifies files that could benefit from watching | *"Want me to fire a job whenever that file changes?"* (→ `file_changed` trigger) |
+| User installs or discusses an app | *"Want me to run something when [app] opens?"* (→ `process_starts` trigger) |
+
+### How to suggest
+
+- **One sentence, as a question.** Don't lecture about the system. Don't explain frontmatter.
+- **Include the cadence and rough cost.** *"Want me to do this every weekday morning? ~$0.20/day on Haiku."*
+- **If they say yes**, immediately design and install the job. Don't ask more questions unless you genuinely need a decision (where to post output, which channel, etc.).
+- **If they ignore or decline**, don't bring it up again in the same session. One offer per pattern.
+
+## Temporal scheduling (one-shot, decay, delayed-start, expiry)
+
+The scheduler supports several temporal patterns beyond simple cron repetition, all via frontmatter fields:
+
+### `run_once: true` — fire once, then auto-disable
+
+```yaml
+---
+name: birthday-reminder
+cron: "0 9 17 4 *"
+run_once: true
+---
+Send a birthday message to the team Slack channel.
+```
+
+After firing once, the scheduler writes a `.auto-disabled` state file. The job stays in the manifest but won't fire again. User can re-enable by deleting `~/.claude/scheduled-jobs/.state/<name>.auto-disabled`.
+
+### `max_runs: N` — fire N times, then auto-disable
+
+```yaml
+---
+name: onboarding-check
+cron: "0 9 * * *"
+max_runs: 5
+---
+Check if the new hire completed each onboarding step. Post progress to Slack.
+```
+
+Counter tracked at `~/.claude/scheduled-jobs/.state/<name>.runs-remaining`. Decrements on each fire. At zero, auto-disabled.
+
+### `valid_after: "<ISO date>"` — don't fire until this date
+
+```yaml
+---
+name: post-launch-monitor
+cron: "0 */2 * * *"
+valid_after: "2026-05-01"
+---
+Check production metrics every 2 hours after the May 1st launch.
+```
+
+Scheduler silently skips this job until the system clock passes the date. Combine with `expires_after` for a bounded window.
+
+### `expires_after: "<ISO date>"` — auto-disable after this date
+
+```yaml
+---
+name: conference-prep
+cron: "0 8 * * *"
+valid_after: "2026-06-01"
+expires_after: "2026-06-05"
+---
+Daily conference schedule digest during the event.
+```
+
+### Decomposing complex temporal requests
+
+Users will say things like: *"Do this every day for a week, then switch to every other day for two weeks, then stop."*
+
+Decompose into multiple jobs with staggered `valid_after` / `expires_after` windows:
+
+| Phase | Job name | Cron | valid_after | expires_after |
+|---|---|---|---|---|
+| Week 1: daily | `task-phase1` | `0 9 * * *` | (now) | 7 days from now |
+| Week 2-3: every other day | `task-phase2` | `0 9 */2 * *` | 7 days from now | 21 days from now |
+
+Create both jobs at once. Phase 1 runs immediately; phase 2 activates when phase 1 expires.
+
+For truly complex requests the user might describe, decompose as far as the system allows. If any requirement can't be expressed in the available frontmatter fields, be transparent: explain what you CAN do, do that, and suggest the user file a feature request at https://github.com/CoreyRDean/open-claude-cron/issues for the missing capability.
+
+## Artifact delivery — where job outputs live
+
+Jobs that produce durable artifacts (digests, reports, triage suggestions) need a clear delivery model. The system does NOT prescribe a default — it's part of the job's prompt. But guide users toward good patterns:
+
+### Delivery surfaces (pick per job)
+
+| Surface | When to use | Tradeoff |
+|---|---|---|
+| **Slack/Discord DM** | User wants push notification + searchable history | Requires MCP; ~$0.15/run cost floor |
+| **Local Markdown file** | User wants zero-MCP cost | No push notification; user must check the file |
+| **Jira/Linear comment** | Artifact is tied to a specific ticket or project | Requires MCP |
+| **Email (Gmail)** | User wants delivery to an inbox they already check | Requires MCP |
+| **Clipboard** (via `pbcopy`) | Ephemeral; user wants to paste somewhere specific | No history; gone after next copy |
+
+### Accumulation pattern
+
+Each job's prompt should specify:
+- **Append** (default for feed-style jobs): each run adds a new section with a timestamp header. History accumulates. Capped implicitly by log rotation (100 files) or the user's own cleanup.
+- **Overwrite** (for "latest status" dashboards): each run replaces the file entirely. Only the most recent state matters.
+- **Thread** (for Slack/Discord): each run is a reply in a thread. History is the thread. Root message is created on first run, discovered on subsequent runs.
+
+When designing a job for the user, ask which pattern they want if the intent is ambiguous. Default to append for digests/reports, overwrite for status dashboards, and thread for chat-based delivery.
+
+### Discoverability
+
+If a job writes to a local file, tell the user exactly where it is after installation. When proactively suggesting a job, mention the output path as part of the pitch: *"I'd write a morning brief to `~/.claude/scheduled-jobs/morning-brief-feed.md` — want me to set it up?"*
 
 ## Architecture
 
@@ -155,6 +292,15 @@ disabled: <bool>                    # optional, default false. If true, schedule
                                     # skips cron firings of this job but keeps
                                     # it in the manifest so other agents can
                                     # still ad-hoc trigger it.
+run_once: <bool>                    # optional. Fire once, then auto-disable.
+                                    # State: .state/<name>.auto-disabled
+max_runs: <int>                     # optional, 0=unlimited. Auto-disable after
+                                    # N fires. State: .state/<name>.runs-remaining
+valid_after: "<ISO date>"           # optional. Scheduler skips until now >= this.
+                                    # "2026-05-01" or "2026-05-01T09:00:00"
+expires_after: "<ISO date>"         # optional. Scheduler auto-disables once
+                                    # now > this. Combine with valid_after for
+                                    # bounded windows.
 external_triggers:                  # optional. List of conditions that fire
                                     # the job between cron slots. Evaluated each
                                     # 60s tick. See "External triggers" section.

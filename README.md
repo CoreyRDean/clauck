@@ -1,22 +1,36 @@
 # open-claude-cron
 
-**Give Claude a schedule.** Drop a Markdown file, set a cron expression, and Claude runs it automatically — hourly digests, file-watcher reactions, daily health checks, whatever you need on repeat. One LaunchAgent, zero daemons, ten-second install.
+**Give Claude a schedule.** Hourly digests, daily standups, file-watcher reactions, email triage, PR reviews — whatever you'd want an agent to do on repeat, without you being there.
+
+### Install it in one sentence:
+
+> **Hey Claude, install open-claude-cron**
+
+Paste that into any Claude Code session. Claude will find the repo, run the installer, verify the pipeline, and walk you through picking your first scheduled jobs.
+
+Or use the shell one-liner directly:
 
 ```bash
 curl -sSL https://raw.githubusercontent.com/CoreyRDean/open-claude-cron/main/install.sh | bash
 ```
 
-The installer walks you through what it will do, asks for confirmation, verifies the pipeline end-to-end, and prints proof it's working.
-
 ---
 
 ## Why
 
-Claude Code is powerful in a terminal. But you have to be there to use it. open-claude-cron runs Claude when you're not — on a schedule, in response to file changes, when an app opens, or when a shell condition flips. Your agent works while you sleep.
+Claude Code is powerful in a terminal. But you have to be there to use it. open-claude-cron makes Claude work when you're not — on a schedule, in response to file changes, when apps open, or when conditions change. Your agent works while you sleep.
 
-**Casual users:** "Summarize my Slack overnight, every morning at 8am" is a single Markdown file.
+**Just want things done on repeat?** Tell Claude what you want:
 
-**Power users:** External triggers, semantic hook manifests for cross-agent delegation, per-job model/budget/MCP-surface tuning, concurrent-run guards, burst-aware file watchers, and a pre-made job library you can extend or fork.
+> *"Claude, do this every morning: summarize my unread Slack messages and email me the digest."*
+>
+> *"Claude, install this job: https://example.com/some-workflow-description"*
+>
+> *"Claude, run this once tomorrow at 9am then delete itself."*
+
+Claude handles the cron, the prompt, the budget, the cleanup. You describe the intent.
+
+**Want full control?** External triggers, semantic hook manifests for cross-agent delegation, per-job model/budget/MCP-surface tuning, concurrent-run guards, burst-aware file watchers, temporal scheduling (one-shot, expiring, delayed-start, decay), and a pre-made job library you can extend or fork.
 
 ## What you get
 
@@ -31,6 +45,8 @@ Claude Code is powerful in a terminal. But you have to be there to use it. open-
 | **Cost controls** | Per-job `model`, `max_budget_usd`, `setting_sources`, `strict_mcp_config`. A minimal job costs ~$0.04/run on Haiku. |
 | **Concurrency guard** | If a job is already running, re-fires noop instead of double-billing you. |
 | **Debouncing** | Optional `debounce_seconds` to suppress rapid re-triggers. |
+| **Temporal scheduling** | One-shot jobs, run-N-times decay, delayed start (`valid_after`), auto-expiry (`expires_after`). Schedule a job for "next Tuesday at 3pm" or "every day for the next week." |
+| **3rd-party job install** | Point Claude at a URL with a workflow description and it crafts an optimized job automatically. |
 | **Fork-first design** | Install from your fork. Updates check your fork. No backdoor from upstream. |
 
 ## Install
@@ -102,11 +118,25 @@ The installer writes your fork URL into the local config. Future update checks t
 
 ### The easy way: just tell Claude
 
-Open any Claude Code session and describe what you want:
+Open any Claude Code session and describe what you want. Claude has a skill for this — it handles cron, model, budget, prompt design, frontmatter, and verification.
 
-> "Every weekday at 8am, summarize my unread Slack messages and email me the digest."
+> *"Every weekday at 8am, summarize my unread Slack messages and email me the digest."*
 
-The `scheduled-jobs` skill handles everything: cron expression, model selection, budget, prompt design, frontmatter. It writes the `.md` file, fires it ad-hoc to verify, and reports the expected monthly cost.
+> *"Run this once tomorrow at 3pm, then clean up after itself."*
+
+> *"Do this every night for 5 days then stop."*
+
+> *"After May 1st, check my Sentry errors every morning."*
+
+### Install a job from any URL
+
+Point Claude at a URL with a workflow description, a blog post, a recipe, or raw instructions:
+
+> *"Claude, install this as a scheduled job: https://example.com/my-workflow-notes"*
+
+> *"Claude, turn this into a daily job: https://gist.github.com/someone/daily-standup-routine"*
+
+Claude reads the content, identifies the repeatable intent, designs an optimized prompt, picks the right cron/trigger/model/budget, and installs it.
 
 ### The manual way: drop a Markdown file
 

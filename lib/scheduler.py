@@ -245,6 +245,18 @@ def discover_jobs() -> list[dict]:
                 # scheduler.tick() skips firing it. Ad-hoc trigger still works.
                 # Handy for pausing a job without editing its cron.
                 "disabled": bool(fm.get("disabled", False)),
+                # --- temporal scheduling ---
+                # run_once: if true, auto-disable after first fire.
+                "run_once": bool(fm.get("run_once", False)),
+                # max_runs: auto-disable after N fires. 0 = unlimited.
+                "max_runs": int(fm.get("max_runs", 0) or 0),
+                # valid_after: ISO8601 date or datetime. Scheduler skips until
+                # now >= this. e.g. "2026-05-01" or "2026-05-01T09:00:00".
+                "valid_after": str(fm.get("valid_after", "")).strip(),
+                # expires_after: ISO8601 date or datetime. Scheduler auto-disables
+                # once now > this.
+                "expires_after": str(fm.get("expires_after", "")).strip(),
+                # --- triggers ---
                 # external_triggers: list of flow-style-object conditions that,
                 # if met, cause the job to fire between cron slots. Evaluated
                 # each tick. See eval_* functions for supported types.
@@ -271,6 +283,63 @@ def last_run(name: str) -> int:
 def set_last_run(name: str, ts: int) -> None:
     STATE_DIR.mkdir(parents=True, exist_ok=True)
     (STATE_DIR / f"{name}.last-run").write_text(str(int(ts)))
+
+
+def is_auto_disabled(name: str) -> bool:
+    return (STATE_DIR / f"{name}.auto-disabled").exists()
+
+
+def auto_disable(name: str, reason: str) -> None:
+    """Mark a job as auto-disabled (run_once exhausted, max_runs hit, expired).
+
+    Creates a state file rather than editing the .md frontmatter — safer and
+    reversible (delete the file to re-enable). The file contains the reason
+    for debugging.
+    """
+    STATE_DIR.mkdir(parents=True, exist_ok=True)
+    (STATE_DIR / f"{name}.auto-disabled").write_text(
+        json.dumps({"reason": reason, "at": datetime.now(timezone.utc).isoformat()})
+    )
+    print(f"[scheduler] auto-disabled {name}: {reason}")
+
+
+def get_runs_remaining(name: str) -> int | None:
+    """Read the runs-remaining counter. Returns None if not set."""
+    p = STATE_DIR / f"{name}.runs-remaining"
+    if not p.exists():
+        return None
+    try:
+        return int(p.read_text().strip())
+    except (OSError, ValueError):
+        return None
+
+
+def decrement_runs_remaining(name: str) -> int:
+    """Decrement and return the new count. Returns 0 if file missing."""
+    p = STATE_DIR / f"{name}.runs-remaining"
+    current = get_runs_remaining(name) or 0
+    new = max(0, current - 1)
+    p.write_text(str(new))
+    return new
+
+
+def parse_datetime_lenient(s: str) -> datetime | None:
+    """Parse ISO8601 date or datetime. Returns None on failure.
+
+    Accepts: "2026-05-01", "2026-05-01T09:00:00", "2026-05-01T09:00:00Z",
+    "2026-05-01T09:00:00+00:00". Date-only is treated as midnight local time.
+    """
+    if not s:
+        return None
+    s = s.strip()
+    try:
+        # Full datetime
+        if "T" in s:
+            return datetime.fromisoformat(s.replace("Z", "+00:00"))
+        # Date only → midnight local
+        return datetime.strptime(s, "%Y-%m-%d")
+    except (ValueError, TypeError):
+        return None
 
 
 # ---------- external triggers ----------
@@ -610,35 +679,71 @@ def tick() -> None:
     minute_start = int(now.replace(second=0, microsecond=0).timestamp())
 
     for job in jobs:
-        if job.get("disabled"):
-            continue  # job is paused; ad-hoc trigger still works
+        name = job["name"]
 
-        # Minute-level dedup: if the job was already fired this minute (by
-        # any path — cron or external trigger), skip further evaluation.
-        if last_run(job["name"]) >= minute_start:
-            continue
+        if job.get("disabled") or is_auto_disabled(name):
+            continue  # paused (manual or auto); ad-hoc trigger still works
 
-        # Evaluate external triggers first. If any fires, dispatch and mark
-        # last_run so the cron check below won't double-fire.
-        if evaluate_external_triggers(job):
-            set_last_run(job["name"], minute_start)
-            print(f"[scheduler] firing {job['name']} @ {now.isoformat()} (external trigger)")
-            fire(job, trigger="external")
-            continue
+        # --- Temporal validity gates ---
+        va = job.get("valid_after", "")
+        if va:
+            valid_dt = parse_datetime_lenient(va)
+            if valid_dt and now < valid_dt:
+                continue  # not yet valid
 
-        # Cron evaluation.
-        if not job["cron"]:
-            continue
-        try:
-            if not cron_matches(job["cron"], now):
+        ea = job.get("expires_after", "")
+        if ea:
+            expires_dt = parse_datetime_lenient(ea)
+            if expires_dt and now > expires_dt:
+                auto_disable(name, f"expired (expires_after={ea})")
                 continue
-        except ValueError as e:
-            print(f"[scheduler] bad cron for {job['name']}: {e}", file=sys.stderr)
+
+        # max_runs: initialize counter on first encounter, skip if exhausted.
+        mr = job.get("max_runs", 0)
+        if mr > 0:
+            remaining = get_runs_remaining(name)
+            if remaining is None:
+                # First time seeing this job — initialize counter.
+                STATE_DIR.mkdir(parents=True, exist_ok=True)
+                (STATE_DIR / f"{name}.runs-remaining").write_text(str(mr))
+            elif remaining <= 0:
+                auto_disable(name, f"max_runs exhausted (max_runs={mr})")
+                continue
+
+        # --- Minute-level dedup ---
+        if last_run(name) >= minute_start:
             continue
-        # Set last-run BEFORE firing to avoid duplicate launches on a slow tick.
-        set_last_run(job["name"], minute_start)
-        print(f"[scheduler] firing {job['name']} @ {now.isoformat()}")
-        fire(job)
+
+        # --- Evaluate triggers and cron ---
+        fired = False
+
+        # External triggers first.
+        if evaluate_external_triggers(job):
+            set_last_run(name, minute_start)
+            print(f"[scheduler] firing {name} @ {now.isoformat()} (external trigger)")
+            fire(job, trigger="external")
+            fired = True
+        else:
+            # Cron evaluation.
+            if job["cron"]:
+                try:
+                    if cron_matches(job["cron"], now):
+                        set_last_run(name, minute_start)
+                        print(f"[scheduler] firing {name} @ {now.isoformat()}")
+                        fire(job)
+                        fired = True
+                except ValueError as e:
+                    print(f"[scheduler] bad cron for {name}: {e}", file=sys.stderr)
+
+        # --- Post-fire temporal bookkeeping ---
+        if fired:
+            if job.get("run_once"):
+                auto_disable(name, "run_once=true (one-shot job)")
+
+            if mr > 0:
+                new_remaining = decrement_runs_remaining(name)
+                if new_remaining <= 0:
+                    auto_disable(name, f"max_runs exhausted (max_runs={mr})")
 
 
 def trigger(name: str) -> None:
