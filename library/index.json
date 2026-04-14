@@ -1,5 +1,5 @@
 {
-  "version": "0.1.0",
+  "version": "v0.1.0",
   "description": "Curated pre-made scheduled-job prompts for open-claude-cron. Browse by category or tags; ask Claude to copy one into your scheduled-jobs directory to install.",
   "jobs": [
     {

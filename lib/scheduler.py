@@ -510,8 +510,10 @@ def fire(job: dict, trigger: str = "scheduled") -> None:
     env["CLAUDE_JOB_FIRED_AT"] = datetime.now(timezone.utc).isoformat()
 
     # Detached login shell so PATH/nvm/keychain resolve as in Terminal.
+    # Job name is passed via env (CLAUDE_JOB_NAME) not as a shell argument,
+    # preventing injection from maliciously-named .md files.
     subprocess.Popen(
-        ["/bin/zsh", "-lc", f'"{RUN_JOB}" "{job["name"]}"'],
+        ["/bin/zsh", "-lc", str(RUN_JOB)],
         env=env,
         stdin=subprocess.DEVNULL,
         stdout=subprocess.DEVNULL,

@@ -1,0 +1,46 @@
+name: CI
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  lint:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Syntax-check shell scripts
+        run: |
+          bash -n install.sh
+          bash -n uninstall.sh
+          bash -n lib/run-job.sh
+          bash -n lib/trigger-job.sh
+          bash -n lib/update-check.sh
+          bash -n lib/scheduled-jobs-notice.sh
+          echo "All shell scripts pass syntax check"
+
+      - name: Parse-check Python
+        run: |
+          /usr/bin/python3 -c "import ast; ast.parse(open('lib/scheduler.py').read())"
+          echo "scheduler.py parses cleanly"
+
+      - name: Validate JSON
+        run: |
+          /usr/bin/python3 -c "import json; json.load(open('library/index.json'))"
+          echo "library/index.json valid"
+
+      - name: Check for secrets
+        run: |
+          # Fail if common secret patterns appear in tracked files (excluding this CI file)
+          if git grep -lE '(ghp_|gho_|sk-proj-|xoxb-|xoxp-|AKIA[0-9A-Z])' -- ':!.github/workflows/ci.yml'; then
+            echo "Potential secret found in tracked files!"
+            exit 1
+          fi
+          echo "No secrets detected"
+
+      - name: Dry-run install
+        run: |
+          bash install.sh --dry-run --yes 2>&1 | tail -20
+          echo "Dry-run passed"

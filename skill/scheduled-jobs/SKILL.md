@@ -120,7 +120,7 @@ One master LaunchAgent, N jobs. Adding a job is dropping a Markdown file.
 | `~/.claude/scheduled-jobs/<name>-<utc-ts>.log` | Per-run log. Rotated at 100 per job. |
 | `~/.claude/scheduled-jobs/.scheduler-stdout.log` | Master scheduler stdout (one line per fire). |
 | `~/.claude/scheduled-jobs/.scheduler-stderr.log` | Master scheduler stderr (bad crons, etc). |
-| `~/Library/LaunchAgents/com.coreyrdean.claude-scheduler.plist` | The LaunchAgent. |
+| `~/Library/LaunchAgents/com.<username>.claude-scheduler.plist` | The LaunchAgent. |
 
 ## Frontmatter schema (the job contract)
 
@@ -204,18 +204,20 @@ mkdir -p ~/Library/LaunchAgents
 
 ### Step 2: Install the three scripts and global prompt
 
-The skill ships canonical copies at `<this-skill-dir>/scripts/` and `<this-skill-dir>/reference/`. Copy them into place:
+Clone the repo and run the installer — it handles all file placement, LaunchAgent registration, and settings.json patching:
 
 ```bash
-SKILL_DIR="$(dirname "$(realpath "$0")")"  # or wherever this skill lives
-cp "$SKILL_DIR/scripts/scheduler.py"      ~/.claude/scheduled-jobs/scheduler.py
-cp "$SKILL_DIR/scripts/run-job.sh"        ~/.claude/scheduled-jobs/run-job.sh
-cp "$SKILL_DIR/scripts/trigger-job.sh"    ~/.claude/scheduled-jobs/trigger-job.sh
-cp "$SKILL_DIR/reference/scheduled-jobs-prompt.md" ~/.claude/scheduled-jobs-prompt.md
-chmod +x ~/.claude/scheduled-jobs/{scheduler.py,run-job.sh,trigger-job.sh}
+git clone https://github.com/CoreyRDean/open-claude-cron /tmp/open-claude-cron-install
+bash /tmp/open-claude-cron-install/install.sh
 ```
 
-The `scheduled-jobs-prompt.md` is the global "how all scheduled jobs should behave" context appended to every job's system prompt. After install, consider editing it to add environment-specific durable-state guidance (e.g., "the canonical cross-invocation state surface on this machine is …") if that's useful for your jobs.
+Or use the one-liner from the README:
+
+```bash
+curl -sSL https://raw.githubusercontent.com/CoreyRDean/open-claude-cron/main/install.sh | bash
+```
+
+The installer places scripts in `~/.claude/scheduled-jobs/`, the skill in `~/.claude/skills/scheduled-jobs/`, the hook in `~/.claude/hooks/`, and the LaunchAgent in `~/Library/LaunchAgents/`. After install, consider editing `~/.claude/scheduled-jobs-prompt.md` to add environment-specific durable-state guidance if useful for your jobs.
 
 ### Step 3: Install the LaunchAgent
 
@@ -635,7 +637,7 @@ Other agent sessions (interactive Claude Code, different long-running sessions, 
 
 The cleanest way to advertise scheduled-job hooks to every agent session without adding content to `~/.claude/CLAUDE.md` (which some users rewrite regularly) is a **SessionStart hook** in `~/.claude/settings.json`. The hook runs a shell script whose stdout is injected into the agent's context at session start.
 
-A reference hook script is included at `<this-skill-dir>/scripts/scheduled-jobs-notice.sh`. On install, copy it to `~/.claude/hooks/scheduled-jobs-notice.sh` and register it:
+The installer registers a hook script at `~/.claude/hooks/scheduled-jobs-notice.sh` and adds it to `~/.claude/settings.json`. The registered entry looks like:
 
 ```json
 {

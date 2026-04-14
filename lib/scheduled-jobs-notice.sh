@@ -15,7 +15,7 @@ MANIFEST="$HOME/.claude/scheduled-jobs/.manifest.json"
 VERSION_FILE="$HOME/.claude/scheduled-jobs/.version"
 UPDATE_AVAILABLE="$HOME/.claude/scheduled-jobs/.state/.update-available"
 
-COUNT=$(python3 -c "
+COUNT=$(/usr/bin/python3 -c "
 import json, sys
 try:
     print(len(json.load(open('$MANIFEST')).get('jobs', [])))
@@ -31,7 +31,7 @@ VERSION=""
 # Build the optional update-available line only if the flag file exists.
 UPDATE_LINE=""
 if [ -f "$UPDATE_AVAILABLE" ]; then
-    UPDATE_LINE=$(python3 -c "
+    UPDATE_LINE=$(/usr/bin/python3 -c "
 import json
 try:
     d = json.load(open('$UPDATE_AVAILABLE'))
