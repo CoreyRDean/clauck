@@ -237,10 +237,6 @@ One LaunchAgent. N jobs. Adding a job is dropping a Markdown file.
 
 The [`stories/`](stories/) directory documents concrete use cases — from *"morning catch-up"* to *"multi-phase project cadence"* to *"jobs that learn across runs."* 10 stories ship with the repo. Agents reference them when suggesting jobs; users browse them for inspiration; contributors submit new ones.
 
-## Roadmap
-
-See [ROADMAP.md](ROADMAP.md). Highlights: job chaining/DAG execution (v1.1), Linux support + alternative harnesses (v1.2), clauck.com dashboard (v2.0).
-
 ## Contributing
 
 See [CONTRIBUTING.md](CONTRIBUTING.md). Marketplace jobs and user stories are especially welcome.
