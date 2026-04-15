@@ -8,7 +8,8 @@ Usage:
     clauck fire <name>                   Ad-hoc trigger a job
     clauck pause <name>                  Disable a job
     clauck resume <name>                 Re-enable a paused job
-    clauck edit <name>                   Open job prompt in your editor
+    clauck edit <name>                   Open job prompt in your editor (flat or module)
+    clauck edit <module>/<stage>         Edit module internal stage file
     clauck remove <name>                 Delete a job + its state (also: delete, rm)
     clauck logs <name> [--last N]        Show recent logs
     clauck marketplace                    Browse pre-made jobs
@@ -496,10 +497,35 @@ def cmd_remove(name: str) -> None:
 
 
 def cmd_edit(name: str) -> None:
-    """Open job prompt in user's editor, validate on close."""
-    job_file = JOBS_DIR / f"{name}.md"
-    if not job_file.exists():
-        die(f"no job file: {job_file}")
+    """Open job prompt in user's editor, validate on close.
+
+    Supports both flat format (<name>.md) and module format (<name>/JOB.md).
+    For module internal stages, use: clauck edit <module>/<stage>
+    """
+    # Support <module>/<stage> for editing internal stage files
+    if "/" in name:
+        parts = name.split("/", 1)
+        module_name, stage = parts[0], parts[1]
+        stage_file = stage if stage.endswith(".md") else f"{stage}.md"
+        job_file = JOBS_DIR / module_name / stage_file
+        if not job_file.exists():
+            die(f"no stage file: {job_file}")
+    else:
+        # Flat format first, then module format
+        flat = JOBS_DIR / f"{name}.md"
+        module_entry = JOBS_DIR / name / "JOB.md"
+        if flat.exists():
+            job_file = flat
+        elif module_entry.exists():
+            job_file = module_entry
+            print(f"  (module job — editing entry point: {job_file.relative_to(JOBS_DIR)})")
+        else:
+            die(
+                f"no job found: {name}"
+                f"\n  checked: {flat}"
+                f"\n  checked: {module_entry}"
+                f"\n  tip: for module stage files use: clauck edit {name}/<stage>"
+            )
 
     # Determine editor: VISUAL > EDITOR > fallback
     editor = os.environ.get("VISUAL") or os.environ.get("EDITOR") or "nano"
@@ -532,12 +558,16 @@ def cmd_edit(name: str) -> None:
     # Validate required-ish fields
     fm_text = fm_match.group(1)
     issues = []
-    if "cron:" not in fm_text and "external_triggers:" not in fm_text:
-        issues.append("no cron or external_triggers — job will only fire via ad-hoc trigger")
-    if "max_budget_usd:" not in fm_text:
-        issues.append("no max_budget_usd — will use default ($2.00)")
-    if "model:" not in fm_text:
-        issues.append("no model specified — will use claude default (Opus)")
+
+    # Internal stage files use producers: instead of cron: — skip scheduling check
+    is_module_stage = job_file.name != "JOB.md" and job_file.parent != JOBS_DIR
+    if not is_module_stage:
+        if "cron:" not in fm_text and "external_triggers:" not in fm_text:
+            issues.append("no cron or external_triggers — job will only fire via ad-hoc trigger")
+        if "max_budget_usd:" not in fm_text:
+            issues.append("no max_budget_usd — will use default ($2.00)")
+        if "model:" not in fm_text:
+            issues.append("no model specified — will use claude default (Opus)")
 
     if issues:
         print("\033[33m  notes:\033[0m")
@@ -545,11 +575,13 @@ def cmd_edit(name: str) -> None:
             print(f"    - {issue}")
     else:
         print("  \033[32m✓\033[0m saved, looks good. Changes take effect within 60s.")
-    # Also reset runs-remaining if max_runs was exhausted
-    rr = STATE_DIR / f"{name}.runs-remaining"
+
+    # Reset runs-remaining on the canonical job name (not stage path)
+    canonical_name = name.split("/")[0] if "/" in name else name
+    rr = STATE_DIR / f"{canonical_name}.runs-remaining"
     if rr.exists():
         rr.unlink()
-        print(f"  reset runs counter for: {name}")
+        print(f"  reset runs counter for: {canonical_name}")
 
 
 def cmd_logs(name: str, last: int = 5) -> None:
