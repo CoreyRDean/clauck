@@ -39,6 +39,25 @@ DAG_RUNNER = JOBS_DIR / "dag-runner.py"
 UPDATE_CHECK = JOBS_DIR / "update-check.sh"
 CONFIG_PATH = JOBS_DIR / ".clauck.config.json"
 UPDATE_LAST_CHECK = STATE_DIR / ".update-last-check"
+DISPATCH_LOG = JOBS_DIR / ".scheduler-dispatch.log"
+_DISPATCH_LOG_MAX_BYTES = 100 * 1024  # rotate at 100 KB
+
+
+def _open_dispatch_log():
+    """Open the dispatch log in append mode, rotating if it exceeds the size cap.
+
+    Returns an open file object (binary append). Caller is responsible for
+    closing it after the subprocess is launched (child retains its own copy
+    of the fd after fork).
+    """
+    if DISPATCH_LOG.exists() and DISPATCH_LOG.stat().st_size > _DISPATCH_LOG_MAX_BYTES:
+        rotated = DISPATCH_LOG.with_suffix(".log.1")
+        try:
+            DISPATCH_LOG.replace(rotated)
+        except OSError:
+            pass  # best-effort; if rename fails, continue appending
+    return open(DISPATCH_LOG, "ab")
+
 
 # Files with these stems are skipped even if they live in jobs dir.
 RESERVED_STEMS = {"scheduler", "run-job", "trigger-job", "update-check"}
@@ -701,15 +720,18 @@ def fire(job: dict, trigger: str = "scheduled") -> None:
     # Detached login shell so PATH/nvm/keychain resolve as in Terminal.
     # Job name is passed via env (CLAUDE_JOB_NAME) not as a shell argument,
     # preventing injection from maliciously-named .md files.
+    # stderr → dispatch log so failures before the job log is created are visible.
+    dispatch_log = _open_dispatch_log()
     subprocess.Popen(
         ["/bin/zsh", "-lc", str(RUN_JOB)],
         env=env,
         stdin=subprocess.DEVNULL,
         stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
+        stderr=dispatch_log,
         start_new_session=True,
         close_fds=True,
     )
+    dispatch_log.close()
 
 
 def fire_dag(job: dict, trigger: str = "scheduled") -> None:
@@ -730,15 +752,17 @@ def fire_dag(job: dict, trigger: str = "scheduled") -> None:
     env["CLAUDE_JOB_MODEL"] = job.get("model", "")
     env["CLAUDE_JOB_TRIGGER"] = trigger
     env["CLAUDE_JOB_FIRED_AT"] = datetime.now(timezone.utc).isoformat()
+    dispatch_log = _open_dispatch_log()
     subprocess.Popen(
         ["/usr/bin/python3", str(DAG_RUNNER), job["name"]],
         env=env,
         stdin=subprocess.DEVNULL,
         stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
+        stderr=dispatch_log,
         start_new_session=True,
         close_fds=True,
     )
+    dispatch_log.close()
 
 
 # ---------- update check ----------
@@ -805,14 +829,16 @@ def maybe_check_for_updates() -> None:
     if auto_apply:
         args.append("--apply")
     try:
+        dispatch_log = _open_dispatch_log()
         subprocess.Popen(
             args,
             stdin=subprocess.DEVNULL,
             stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
+            stderr=dispatch_log,
             start_new_session=True,
             close_fds=True,
         )
+        dispatch_log.close()
     except OSError as e:
         print(f"[scheduler] update-check dispatch failed: {e}", file=sys.stderr)
 

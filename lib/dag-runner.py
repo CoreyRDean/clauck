@@ -35,8 +35,20 @@ STATE_DIR = JOBS_DIR / ".state"
 MANIFEST_PATH = JOBS_DIR / ".manifest.json"
 RUN_JOB = JOBS_DIR / "run-job.sh"
 TRIGGER_JOB = JOBS_DIR / "trigger-job.sh"
+DISPATCH_LOG = JOBS_DIR / ".scheduler-dispatch.log"
+_DISPATCH_LOG_MAX_BYTES = 100 * 1024
 
 DEFAULT_TIMEOUT = 600  # 10 minutes
+
+
+def _open_dispatch_log():
+    """Open the shared dispatch log in append mode, rotating at 100 KB."""
+    if DISPATCH_LOG.exists() and DISPATCH_LOG.stat().st_size > _DISPATCH_LOG_MAX_BYTES:
+        try:
+            DISPATCH_LOG.replace(DISPATCH_LOG.with_suffix(".log.1"))
+        except OSError:
+            pass
+    return open(DISPATCH_LOG, "ab")
 
 
 # ---------- logging ----------
@@ -503,14 +515,16 @@ def deliver_to_consumers(
 
         logger.log(f"triggering consumer: {consumer}")
         try:
+            dispatch_log = _open_dispatch_log()
             subprocess.Popen(
                 ["/bin/zsh", "-lc", f"{TRIGGER_JOB} {consumer}"],
                 stdin=subprocess.DEVNULL,
                 stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
+                stderr=dispatch_log,
                 start_new_session=True,
                 close_fds=True,
             )
+            dispatch_log.close()
             logger.log_event(
                 consumer, "consumer_triggered", layer=-1,
                 triggered_by=job_name,
