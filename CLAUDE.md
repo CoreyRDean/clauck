@@ -81,6 +81,7 @@ launchd (60s tick) → scheduler.py
 | State | `~/.claude/scheduled-jobs/.state/` |
 | Config | `~/.claude/scheduled-jobs/.clauck.config.json` |
 | Version | `~/.claude/scheduled-jobs/.version` |
+| Build source | `~/.claude/scheduled-jobs/.build-source` (channel, source, git SHA) |
 | Skill | `~/.claude/skills/clauck/SKILL.md` |
 | Marketplace | `~/.claude/skills/clauck/marketplace/` |
 | Hook | `~/.claude/hooks/scheduled-jobs-notice.sh` |
@@ -125,6 +126,26 @@ producers:                           # pipeline: pull dependencies
 consumers:                           # pipeline: push to downstream jobs
   - <job-name>
 ---
+```
+
+### Release channels
+
+clauck ships on two channels with one underlying branch. See [RELEASES.md](RELEASES.md) for the full process.
+
+- **`stable`** (default) — tagged releases (`v1.5.7`). `/releases/latest` excludes prereleases automatically.
+- **`nightly`** — rolling pre-release tracking main HEAD. The `.github/workflows/nightly.yml` workflow fast-forwards the `nightly` tag to main HEAD daily at 07:00 UTC and republishes the pre-release.
+- **`local`** — client-side label for dev-tree installs. `install.sh` detects local checkouts, stamps `channel: local` in `.build-source`, and tells `update-check.sh` to skip (so your dev install doesn't spam fake update notices).
+
+**PR targeting:** all PRs target `main`. There is no `dev` branch.
+
+**Cutting a release:** tag a stable point on main as `vX.Y.Z`, push the tag, create a non-prerelease GitHub Release at that tag. Write the release body inline (no separate CHANGELOG file — GitHub releases are the changelog). Then in the very next commit on main, bump the `VERSION` file to the next target (e.g. `v1.5.7` → `v1.5.8`) so all subsequent nightlies and local installs reflect the version being worked toward.
+
+**Testing behavior of each channel locally:**
+```bash
+bash install.sh                         # auto-detects local checkout → channel=local
+bash install.sh --channel=stable        # force a stable-channel install from this tree
+bash install.sh --channel=nightly       # force a nightly-channel install
+clauck version                          # shows channel + build source + git SHA for non-stable
 ```
 
 ### Commit conventions
