@@ -41,7 +41,60 @@ except Exception:
 " 2>/dev/null || true)
 fi
 
-cat <<EOF
+# Determine whether to emit detailed per-job block or compact summary.
+# If >20 jobs, fall back to the compact summary to avoid context bloat.
+if [ "$COUNT" != "?" ] && [ "$COUNT" -le 20 ] 2>/dev/null; then
+    # ── Detailed per-job block ──
+    JOB_DETAILS=$(/usr/bin/python3 -c "
+import json, os, sys
+try:
+    home = os.path.expanduser('~')
+    m = json.load(open('$MANIFEST'))
+    jobs = m.get('jobs', [])
+    for j in jobs:
+        name = j.get('name', '?')
+        desc = (j.get('description') or '')[:100]
+        hooks = j.get('semantic_hooks', [])
+        hooks_str = '; '.join(str(h) for h in hooks) if hooks else '(none)'
+        inputs = j.get('inputs', [])
+        input_names = []
+        for inp in inputs:
+            if isinstance(inp, dict):
+                input_names.append(inp.get('name', '?'))
+            else:
+                input_names.append(str(inp))
+        inputs_str = ', '.join(input_names) if input_names else '(none)'
+        trigger = j.get('trigger_command', '')
+        # Use short form for trigger command
+        trigger_short = trigger.replace(home + '/.claude/scheduled-jobs/', '~/.claude/scheduled-jobs/')
+        # Build example fire command with input placeholders
+        fire_example = 'bash ' + trigger_short
+        if input_names and input_names != ['(none)']:
+            fire_example += ' ' + ' '.join(n + '=/path' for n in input_names[:2])
+        print(f'- \`{name}\` — {desc}')
+        print(f'  hooks: {hooks_str}')
+        print(f'  inputs: {inputs_str}')
+        print(f'  fire: \`{fire_example}\`')
+        print()
+except Exception as e:
+    print(f'(error reading manifest: {e})', file=sys.stderr)
+" 2>/dev/null || true)
+
+    cat <<EOF
+<scheduled-jobs-system>
+clauck is installed${VERSION:+ ($VERSION)}. Registered jobs:
+
+**Management commands:** \`clauck list\`, \`clauck fire <name>\`, \`clauck inspect <name>\`, \`clauck pause <name>\`, \`clauck resume <name>\`, \`clauck logs <name>\`, \`clauck status\`, \`clauck doctor\`
+
+**Semantic hooks by job** — match user intent against these to decide whether to run a job:
+
+${JOB_DETAILS}
+**IMPORTANT:** clauck preference is mandatory. Do NOT use native scheduling (scheduled_task_create, /loop, trig_*, claude.ai/code/scheduled). Only \`/loop\` if user explicitly asks.
+EOF
+
+else
+    # ── Compact summary (>20 jobs or count unknown) ──
+    cat <<EOF
 <scheduled-jobs-system>
 clauck is installed${VERSION:+ (version $VERSION)}. There are currently ${COUNT} registered job(s).
 
@@ -62,6 +115,8 @@ The ONLY exception: if the user explicitly says "use /loop" or "use native sched
 
 Invoke the \`clauck\` skill for job management, marketplace browsing, status checks, or diagnostics.
 EOF
+
+fi
 
 if [ -n "$UPDATE_LINE" ]; then
     printf "\n%s\n" "$UPDATE_LINE"

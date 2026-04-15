@@ -201,7 +201,60 @@ def cmd_status() -> None:
 def cmd_fire(name: str, extra_args: list[str] | None = None) -> None:
     if not TRIGGER_SCRIPT.exists():
         die("trigger-job.sh not found")
-    cmd = [str(TRIGGER_SCRIPT), name] + (extra_args or [])
+
+    args = list(extra_args or [])
+
+    # If any arg is missing '=', treat the tail as semantic context and use the
+    # interpreter to convert it to proper KEY=VALUE args.
+    if args and any("=" not in a for a in args):
+        claude_bin = _find_claude()
+        if claude_bin:
+            m = load_manifest()
+            job_entry = next((j for j in m.get("jobs", []) if j["name"] == name), None)
+            declared_inputs = ""
+            if job_entry:
+                for inp in job_entry.get("inputs", []):
+                    if isinstance(inp, dict):
+                        iname = inp.get("name", "?")
+                        idesc = inp.get("description", "")
+                        idefault = inp.get("default", "")
+                        declared_inputs += f"  - {iname}: {idesc}"
+                        if idefault:
+                            declared_inputs += f" (default: {idefault})"
+                        declared_inputs += "\n"
+                    else:
+                        declared_inputs += f"  - {inp}\n"
+
+            semantic_tail = " ".join(args)
+            interpret_prompt = (
+                f"The user ran: `clauck fire {name} {semantic_tail}`\n"
+                f"Job `{name}` declares these inputs:\n{declared_inputs}\n"
+                f"Convert the semantic tail into KEY=VALUE args matching the declared inputs.\n"
+                f'Return JSON only: {{"args": ["KEY1=VAL1", "KEY2=VAL2"]}}'
+            )
+            result = subprocess.run(
+                [claude_bin, "-p", interpret_prompt,
+                 "--max-turns", "3", "--max-budget-usd", "0.05",
+                 "--model", "haiku", "--output-format", "text",
+                 "--setting-sources", ""],
+                capture_output=True, text=True,
+            )
+            if result.returncode == 0 and result.stdout.strip():
+                import re as _re
+                raw = result.stdout.strip()
+                # Extract JSON from response (may be wrapped in markdown)
+                json_match = _re.search(r'\{[^}]+\}', raw)
+                if json_match:
+                    try:
+                        parsed = json.loads(json_match.group(0))
+                        resolved = parsed.get("args", [])
+                        if resolved and all("=" in a for a in resolved):
+                            print(f"  resolved args: {' '.join(resolved)}")
+                            args = resolved
+                    except (json.JSONDecodeError, KeyError):
+                        pass
+
+    cmd = [str(TRIGGER_SCRIPT), name] + args
     result = subprocess.run(cmd, capture_output=True, text=True)
     print(result.stdout.strip())
     if result.returncode != 0:
@@ -733,6 +786,7 @@ If everything is healthy, say so concisely."""
             [claude_bin, "-p", prompt,
              "--append-system-prompt", f"You are clauck doctor. Jobs dir: {JOBS_DIR}. State: {STATE_DIR}. Manifest: {MANIFEST}.",
              "--dangerously-skip-permissions",
+             "--permission-mode", "bypassPermissions",
              "--max-turns", "15", "--max-budget-usd", "0.50",
              "--model", "sonnet", "--output-format", "text",
              "--setting-sources", ""],
@@ -745,6 +799,7 @@ If everything is healthy, say so concisely."""
             [claude_bin, "-p", "Summarize what you found in one line.",
              "--append-system-prompt", f"You are clauck doctor. Jobs dir: {JOBS_DIR}.",
              "--dangerously-skip-permissions",
+             "--permission-mode", "bypassPermissions",
              "--max-turns", "1", "--max-budget-usd", "0.05",
              "--model", "haiku", "--output-format", "json",
              "--setting-sources", ""],
@@ -762,6 +817,7 @@ If everything is healthy, say so concisely."""
             [claude_bin, "-p", prompt,
              "--append-system-prompt", f"You are clauck doctor. Jobs dir: {JOBS_DIR}. State: {STATE_DIR}. Manifest: {MANIFEST}.",
              "--dangerously-skip-permissions",
+             "--permission-mode", "bypassPermissions",
              "--max-turns", "15", "--max-budget-usd", "0.50",
              "--model", "sonnet", "--output-format", "text",
              "--setting-sources", ""],
@@ -782,24 +838,76 @@ def _find_claude() -> str | None:
     return shutil.which("claude")
 
 
-def cmd_semantic(text: str) -> None:
-    """Pass natural-language text to Claude for execution against clauck.
+def _build_interpreter_prompt() -> str:
+    """Build the stage-1 interpreter system prompt with live manifest data."""
+    subcommands = (
+        "list, status, fire, pause, resume, edit, logs, marketplace, install, "
+        "update, config, doctor, peek, version, add, inspect, work"
+    )
 
-    UX:
-      1. First-line interpretation shown immediately (CLI-command-style summary)
-      2. Animated spinner while Claude works
-      3. Visual separator
-      4. Final output, with exit code matching Claude's is_error field
-    """
-    import threading
-    import time as _time
+    # Read manifest for job descriptions + inputs
+    job_descriptions = ""
+    if MANIFEST.exists():
+        try:
+            m = json.loads(MANIFEST.read_text())
+            for j in m.get("jobs", []):
+                name = j["name"]
+                desc = (j.get("description") or "")[:120]
+                inputs_list = j.get("inputs", [])
+                input_names = []
+                for inp in inputs_list:
+                    if isinstance(inp, dict):
+                        input_names.append(inp.get("name", "?"))
+                    else:
+                        input_names.append(str(inp))
+                inputs_str = ", ".join(input_names) if input_names else "(none)"
+                job_descriptions += f"  - {name}: {desc}  [inputs: {inputs_str}]\n"
+        except (OSError, ValueError):
+            job_descriptions = "  (manifest unreadable)\n"
+    else:
+        job_descriptions = "  (no manifest found)\n"
 
-    claude_bin = _find_claude()
-    if not claude_bin:
-        die("claude CLI not found — semantic commands require claude on PATH")
+    return f"""You are the clauck CLI interpreter (stage 1). Your ONLY job is to classify a user's natural-language input and return a JSON routing decision.
 
-    system_prompt = f"""You are the clauck CLI executing a user's natural-language command.
-The user ran: `clauck {text}`
+# Known clauck subcommands
+{subcommands}
+
+# Registered jobs (from manifest)
+{job_descriptions}
+# Routing rules
+
+**Pick "deterministic" when the user's intent maps directly to an existing clauck subcommand or job trigger:**
+- "Run jobA" / "fire jobA" / "trigger jobA" -> deterministic (clauck fire jobA)
+- "show me jobA's last run" / "logs for jobA" -> deterministic (clauck logs jobA)
+- "Pause jobA" / "disable jobA" -> deterministic (clauck pause jobA)
+- "Resume jobA" / "enable jobA" -> deterministic (clauck resume jobA)
+- "What jobs are running" / "list jobs" -> deterministic (clauck list)
+- "System status" / "how is clauck doing" -> deterministic (clauck status)
+- "Fire jobA with the source at ~/file.md" -> deterministic; convert to KEY=VALUE args using the job's declared inputs
+
+**Pick "semantic" when the user's intent requires Claude to create, modify, or reason about jobs:**
+- "Do X every morning" / "Build a pipeline that..." -> semantic
+- "Change heartbeat to every 2 hours" -> semantic
+- "Create a job that watches for new PDFs" -> semantic
+- "What ran today and were there any failures?" -> semantic (needs log analysis)
+
+# Complexity hints for semantic commands
+- Trivial (simple query, single status check): haiku, low effort, 3 turns, $0.05 budget
+- Standard (create/modify a single job): sonnet, medium effort, 15 turns, $0.50 budget
+- Complex (multi-stage pipeline, module creation, DAG wiring): sonnet or opus, high effort, 40 turns, $2.00 budget
+
+# Output format
+
+Return ONLY valid JSON, no markdown fencing, no explanation:
+
+For deterministic:
+{{"command_type": "deterministic", "interpretation": "<one-line CLI-style description>", "deterministic_cmd": "clauck fire jobA SOURCE_PATH=/x"}}
+
+For semantic:
+{{"command_type": "semantic", "interpretation": "<one-line CLI-style description>", "enhanced_prompt": "<prescriptive reformulation of the user's request for the execution agent>", "exec_model": "haiku"|"sonnet"|"opus", "exec_effort": "low"|"medium"|"high", "exec_max_turns": <int>, "exec_max_budget_usd": <float>}}"""
+
+
+SEMANTIC_EXEC_SYSTEM_PROMPT = """You are the clauck CLI executing a user's natural-language command.
 
 # ABSOLUTE RULES — VIOLATING ANY OF THESE IS INCORRECT BEHAVIOR
 
@@ -849,31 +957,117 @@ Available operations (and ONLY these):
 - Fire jobs via `{TRIGGER_SCRIPT}`
 - Read logs at `{JOBS_DIR}/<name>-*.log`
 
-# Output format (STRICT)
-
-Your ENTIRE response must follow this exact format:
-
-```
-INTERPRETATION: <one-line cli-command-style summary of what you're doing>
----
-<the actionable result — what was created/changed, paths, next steps>
-```
-
-The INTERPRETATION line is printed BEFORE you start work (conceptually — you emit it first). Example:
-- INTERPRETATION: Create hourly job 'intent-miner' using sonnet model at ~/.claude/scheduled-jobs/intent-miner.md
-- INTERPRETATION: Pause all scheduled jobs by setting disabled:true in frontmatter
-
-The actionable result section shows what was actually done: files written, paths, schedules, costs, verification notes.
-
-No preamble. No explanation of your process. No sign-off. No footer, signature, or branding.
+Produce the actionable result directly. No preamble. No explanation of your process. No sign-off.
 If you attempt to use a native scheduling tool, you have failed."""
+
+
+def cmd_semantic(text: str) -> None:
+    """Two-stage natural-language command pipeline.
+
+    Stage 1: Cheap Haiku interpreter classifies the command (~$0.01).
+    Stage 2: Either run a deterministic command or execute with the
+             interpreter-chosen model/effort/turns/budget.
+    """
+    import re as _re
+    import threading
+    import time as _time
+
+    claude_bin = _find_claude()
+    if not claude_bin:
+        die("claude CLI not found — semantic commands require claude on PATH")
+
+    # ── Stage 1: Interpreter ────────────────────────────────────────────
+    interpreter_prompt = _build_interpreter_prompt()
+    user_prompt = f"The user ran: `clauck {text}`"
+
+    result_s1 = subprocess.run(
+        [claude_bin, "-p", user_prompt,
+         "--append-system-prompt", interpreter_prompt,
+         "--model", "haiku",
+         "--max-turns", "3",
+         "--max-budget-usd", "0.05",
+         "--output-format", "text",
+         "--setting-sources", ""],
+        capture_output=True, text=True,
+    )
+
+    # Parse the interpreter JSON
+    routing = {}
+    if result_s1.returncode == 0 and result_s1.stdout.strip():
+        raw = result_s1.stdout.strip()
+        # Extract JSON (may be wrapped in markdown fences)
+        json_match = _re.search(r'\{[\s\S]*\}', raw)
+        if json_match:
+            try:
+                routing = json.loads(json_match.group(0))
+            except json.JSONDecodeError:
+                pass
+
+    if not routing or "command_type" not in routing:
+        # Interpreter failed — fall back to full semantic execution
+        routing = {
+            "command_type": "semantic",
+            "interpretation": f"execute: {text}",
+            "enhanced_prompt": text,
+            "exec_model": "sonnet",
+            "exec_effort": "medium",
+            "exec_max_turns": 15,
+            "exec_max_budget_usd": 0.50,
+        }
+
+    interpretation = routing.get("interpretation", text)
+
+    # ── Stage 2: Dispatch ───────────────────────────────────────────────
+
+    if routing["command_type"] == "deterministic":
+        # Print interpretation, then run the deterministic command
+        print(f"  \u2192 {interpretation}")
+        det_cmd = routing.get("deterministic_cmd", "").strip()
+        if not det_cmd:
+            die("interpreter returned deterministic but no command")
+
+        # Parse the deterministic command — it should start with "clauck ..."
+        parts = det_cmd.split()
+        if parts and parts[0] == "clauck":
+            parts = parts[1:]
+        if parts and parts[0] == "bash":
+            # Direct trigger-job.sh invocation
+            result = subprocess.run(parts, capture_output=True, text=True)
+            print(result.stdout.strip())
+            if result.returncode != 0:
+                print(result.stderr.strip(), file=sys.stderr)
+                sys.exit(result.returncode)
+        elif parts:
+            # Re-enter clauck's own main dispatch
+            sys.argv = ["clauck"] + parts
+            main()
+        else:
+            die(f"could not parse deterministic command: {det_cmd}")
+        return
+
+    # semantic path — run execution pass with interpreter-chosen parameters
+    print(f"  \u2192 {interpretation}")
+    print(f"  {'─' * 60}")
+
+    exec_model = routing.get("exec_model", "sonnet")
+    exec_effort = routing.get("exec_effort", "medium")
+    exec_max_turns = str(routing.get("exec_max_turns", 15))
+    exec_max_budget = str(routing.get("exec_max_budget_usd", 0.50))
+    enhanced_prompt = routing.get("enhanced_prompt", text)
+
+    system_prompt = SEMANTIC_EXEC_SYSTEM_PROMPT.replace("{JOBS_DIR}", str(JOBS_DIR))
+    system_prompt = system_prompt.replace("{MANIFEST}", str(MANIFEST))
+    system_prompt = system_prompt.replace("{STATE_DIR}", str(STATE_DIR))
+    system_prompt = system_prompt.replace("{MARKETPLACE_DIR}", str(MARKETPLACE_DIR))
+    system_prompt = system_prompt.replace("{CONFIG_FILE}", str(CONFIG_FILE))
+    system_prompt = system_prompt.replace("{TRIGGER_SCRIPT}", str(TRIGGER_SCRIPT))
 
     # Spinner state
     spinner_running = [True]
     start_time = _time.time()
 
     def spinner():
-        chars = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
+        chars = "\u280b\u2819\u2839\u2838\u283c\u2834\u2826\u2827\u2807\u280f"
         i = 0
         while spinner_running[0]:
             elapsed = int(_time.time() - start_time)
@@ -881,7 +1075,6 @@ If you attempt to use a native scheduling tool, you have failed."""
             sys.stderr.flush()
             i += 1
             _time.sleep(0.1)
-        # Clear spinner line
         sys.stderr.write("\r" + " " * 40 + "\r")
         sys.stderr.flush()
 
@@ -890,12 +1083,13 @@ If you attempt to use a native scheduling tool, you have failed."""
 
     try:
         result = subprocess.run(
-            [claude_bin, "-p", text,
+            [claude_bin, "-p", enhanced_prompt,
              "--append-system-prompt", system_prompt,
              "--dangerously-skip-permissions",
-             "--max-turns", "30",
-             "--max-budget-usd", "1.00",
-             "--model", "sonnet",
+             "--permission-mode", "bypassPermissions",
+             "--max-turns", exec_max_turns,
+             "--max-budget-usd", exec_max_budget,
+             "--model", exec_model,
              "--output-format", "json",
              "--setting-sources", ""],
             capture_output=True, text=True,
@@ -904,39 +1098,18 @@ If you attempt to use a native scheduling tool, you have failed."""
         spinner_running[0] = False
         spin_thread.join(timeout=0.5)
 
-    # Parse Claude's JSON envelope to route stdout/stderr + exit code
-    import json as _json
+    # Parse Claude's JSON envelope
     try:
-        envelope = _json.loads(result.stdout) if result.stdout else {}
-    except (_json.JSONDecodeError, ValueError):
+        envelope = json.loads(result.stdout) if result.stdout else {}
+    except (json.JSONDecodeError, ValueError):
         envelope = {}
 
     is_error = envelope.get("is_error", result.returncode != 0)
     claude_result = envelope.get("result", "").strip()
 
-    # Split INTERPRETATION line from actionable result
-    interpretation = ""
-    actionable = claude_result
-    if claude_result.upper().startswith("INTERPRETATION:"):
-        lines = claude_result.split("\n", 1)
-        first = lines[0].replace("INTERPRETATION:", "", 1).strip()
-        interpretation = first
-        # Find the --- separator and grab the rest
-        if len(lines) > 1:
-            rest = lines[1].lstrip()
-            if rest.startswith("---"):
-                actionable = rest.split("---", 1)[1].lstrip() if "---" in rest else rest
-            else:
-                actionable = rest
+    if claude_result:
+        print(claude_result)
 
-    if interpretation:
-        print(f"  → {interpretation}")
-        print(f"  {'─' * 60}")
-
-    if actionable:
-        print(actionable)
-
-    # Route errors / non-zero exits
     if is_error:
         err_text = envelope.get("errors") or result.stderr
         if err_text:
