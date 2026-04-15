@@ -277,8 +277,59 @@ def discover_jobs() -> list[dict]:
                 # --- pipeline ---
                 "producers": list(fm.get("producers", []) or []),
                 "consumers": list(fm.get("consumers", []) or []),
+                # --- module ---
+                "module_root": "",
             }
         )
+
+    # Discover module-format jobs: <name>/JOB.md
+    for job_dir in sorted(JOBS_DIR.iterdir()):
+        if not job_dir.is_dir():
+            continue
+        if job_dir.name.startswith("."):
+            continue
+        job_md = job_dir / "JOB.md"
+        if not job_md.exists():
+            continue
+        # This is a module — JOB.md is the entry point
+        try:
+            text = job_md.read_text(encoding="utf-8")
+        except OSError as e:
+            print(f"[scheduler] read error {job_md}: {e}", file=sys.stderr)
+            continue
+        fm, _body = parse_frontmatter(text)
+        name = fm.get("name") or job_dir.name
+        # Build the job dict same as flat format, plus module_root
+        jobs.append(
+            {
+                "name": str(name),
+                "path": str(job_md),
+                "description": str(fm.get("description", "")),
+                "cron": str(fm.get("cron", "")).strip(),
+                "max_turns": int(fm.get("max_turns", 50)),
+                "max_budget_usd": float(fm.get("max_budget_usd", 2.0)),
+                "cwd": os.path.expanduser(str(fm.get("cwd") or "~")),
+                "effort": str(fm.get("effort", "high")),
+                "model": str(fm.get("model", "")).strip(),
+                "setting_sources": fm.get("setting_sources", None),
+                "strict_mcp_config": bool(fm.get("strict_mcp_config", False)),
+                "debounce_seconds": int(fm.get("debounce_seconds", 0) or 0),
+                "disabled": bool(fm.get("disabled", False)),
+                "run_once": bool(fm.get("run_once", False)),
+                "max_runs": int(fm.get("max_runs", 0) or 0),
+                "valid_after": str(fm.get("valid_after", "")).strip(),
+                "expires_after": str(fm.get("expires_after", "")).strip(),
+                "session_persist": bool(fm.get("session_persist", False)),
+                "interactive": bool(fm.get("interactive", False)),
+                "external_triggers": list(fm.get("external_triggers", []) or []),
+                "semantic_hooks": list(fm.get("semantic_hooks", []) or []),
+                "tags": list(fm.get("tags", []) or []),
+                "producers": list(fm.get("producers", []) or []),
+                "consumers": list(fm.get("consumers", []) or []),
+                "module_root": str(job_dir),  # extra field for modules
+            }
+        )
+
     return jobs
 
 
@@ -595,6 +646,7 @@ def write_manifest(jobs: list[dict]) -> None:
                 "consumers": j.get("consumers", []),
                 "trigger_command": f'{JOBS_DIR / "trigger-job.sh"} {j["name"]}',
                 "prompt_path": j["path"],
+                "module_root": j.get("module_root", ""),
             }
             for j in jobs
         ],

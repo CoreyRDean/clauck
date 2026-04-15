@@ -974,6 +974,71 @@ Since `settings.json` is separate from `CLAUDE.md`, it survives CLAUDE.md rewrit
 
 If an agent ad-hoc-triggers a job that's already running, the second invocation noops (logged as `concurrent_skip`). No coordination is needed on the calling side — it's safe to call `trigger-job.sh <name>` from anywhere at any time.
 
+## Job formats
+
+### Standard format (single file)
+
+A named Markdown file with optional YAML frontmatter:
+
+```
+~/.claude/scheduled-jobs/my-job.md
+```
+
+If frontmatter is missing entirely, the system applies defaults (name from filename, `max_budget_usd: 2.00`, `effort: high`, ad-hoc only). Users can literally drop any `.md` prompt file into the jobs folder and it will work.
+
+### Module format (folder with JOB.md)
+
+A named folder containing a `JOB.md` anchor file:
+
+```
+~/.claude/scheduled-jobs/pe-pipeline/
+  JOB.md              ← entry point (config + prompt)
+  extract.md          ← internal stage (invisible to main registry)
+  refine.md           ← internal stage
+  scripts/            ← arbitrary assets
+  assets/             ← arbitrary assets
+  sub-module/         ← nested module (has its own JOB.md)
+    JOB.md
+    step-a.md
+    step-b.md
+```
+
+**Rules:**
+- Only `JOB.md` appears in the manifest and job listings. Internal `.md` files are hidden.
+- The folder name is the job name (unless `name:` is set in JOB.md frontmatter).
+- Internal files can form their own DAG via `producers:` / `consumers:`. But they cannot link to jobs OUTSIDE the module — only JOB.md can be a producer/consumer for external jobs.
+- **All paths in internal prompts are relative to the module root.** `scripts/helper.py` in JOB.md and in `extract.md` both reference the same file at `<module-root>/scripts/helper.py`.
+- **Nested modules** are supported. A folder with its own `JOB.md` inside a module is a sub-module with its own isolation boundary. Sub-module internals cannot reference parent module internals directly — they communicate only through their own JOB.md.
+- A folder WITHOUT `JOB.md` is just an organizational directory for top-level flat jobs — not a module.
+
+**When to suggest the module format:** when a user describes a multi-stage pipeline where the internal stages are implementation details, not independently useful jobs. The pe-* pipeline (10-stage prompt enhancement) is the canonical example — it should be ONE module, not 10 top-level jobs.
+
+### `clauck add`
+
+Users can add jobs from any file:
+
+```bash
+clauck add ./my-prompt.md                    # copies as-is, ad-hoc only
+clauck add ./my-prompt.md --name daily-brief # custom name
+clauck add ./my-prompt.md --when "every weekday at 8am"  # sets schedule via Claude
+```
+
+If the file has no frontmatter, minimal defaults are prepended. The `--when` flag spawns a quick Claude session to interpret the natural language schedule and set the appropriate frontmatter.
+
+## Reporting issues and contributing fixes
+
+When you encounter a genuine system limitation, unsupported feature, or a user has a good idea for clauck:
+
+1. **Offer to report it.** "This isn't supported yet — want me to open an issue on the clauck repo?"
+2. **If yes, mine intent** to close the delta. Collect evidence of any claims.
+3. **Open the issue:**
+   - Try `gh issue create --repo CoreyRDean/clauck` first
+   - If `gh` unavailable: open the browser to `https://github.com/CoreyRDean/clauck/issues/new` and provide the user with copy-paste-ready title and body
+   - If fork override is in the config, ask whether to report on the fork or upstream
+4. **If the user wants to fix it:** walk them through the fix, prepare a draft PR, install from source so they can use the patched version immediately while the community reviews.
+
+The config file at `~/.claude/scheduled-jobs/.clauck.config.json` has a `"repo"` field — use it as the issue target. If it's a fork and the user wants to report upstream, use `CoreyRDean/clauck`.
+
 ## Portability and security notes
 
 - The system assumes macOS + launchd. Linux equivalent would swap the LaunchAgent for a systemd user unit with `OnCalendar=` or a user crontab; `scheduler.py` and `run-job.sh` port as-is.

@@ -13,6 +13,7 @@ Usage:
     clauck install <marketplace-job>     Install from marketplace
     clauck update [--apply]              Check for / apply updates
     clauck config [set <key> <value>]    Show or edit config
+    clauck add <path> [--name N] [--when "schedule"]  Import a file as a job
     clauck doctor [-i|--interactive]     Diagnose system health
     clauck peek                          Live-tail all job logs (Ctrl+C to stop)
     clauck version                       Show version
@@ -43,12 +44,13 @@ VERSION_FILE = JOBS_DIR / ".version"
 CONFIG_FILE = JOBS_DIR / ".clauck.config.json"
 TRIGGER_SCRIPT = JOBS_DIR / "trigger-job.sh"
 UPDATE_SCRIPT = JOBS_DIR / "update-check.sh"
-MARKETPLACE_DIR = HOME / ".claude" / "skills" / "scheduled-jobs" / "marketplace"
+MARKETPLACE_DIR = HOME / ".claude" / "skills" / "clauck" / "marketplace"
 
 
 KNOWN_COMMANDS = {
     "list", "status", "fire", "pause", "resume", "edit", "logs",
     "marketplace", "install", "update", "config", "version", "doctor", "peek", "work",
+    "add",
     "-h", "--help", "help",
 }
 
@@ -472,7 +474,67 @@ def cmd_version() -> None:
     print(f"clauck {v}")
 
 
-def cmd_doctor(interactive: bool = False) -> None:
+def cmd_add(path: str, name: str = "", when: str = "") -> None:
+    """Import a file as a scheduled job."""
+    import shutil
+    src = Path(path).expanduser().resolve()
+    if not src.exists():
+        die(f"file not found: {src}")
+    job_name = name or src.stem
+    dst = JOBS_DIR / f"{job_name}.md"
+    if dst.exists():
+        die(f"job already exists: {dst}. Remove it first or use `clauck edit {job_name}`.")
+    JOBS_DIR.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(str(src), str(dst))
+
+    # If the file has no YAML frontmatter, prepend minimal defaults
+    text = dst.read_text(encoding="utf-8")
+    if not text.startswith("---"):
+        header = (
+            "---\n"
+            f"name: {job_name}\n"
+            "max_budget_usd: 2.00\n"
+            "effort: high\n"
+            "---\n"
+        )
+        dst.write_text(header + text)
+
+    # If --when provided, use claude to interpret the schedule
+    if when:
+        claude_bin = _find_claude()
+        if claude_bin:
+            interpret_prompt = (
+                f'The user wants to schedule a job with this timing: "{when}"\n'
+                f"Convert this to a 5-field cron expression (minute hour day-of-month month day-of-week).\n"
+                f"Reply with ONLY the cron expression, nothing else. Example: 0 9 * * 1-5"
+            )
+            result = subprocess.run(
+                [claude_bin, "-p", interpret_prompt,
+                 "--max-turns", "1", "--max-budget-usd", "0.05",
+                 "--model", "haiku", "--output-format", "text",
+                 "--setting-sources", ""],
+                capture_output=True, text=True,
+            )
+            cron_expr = result.stdout.strip()
+            if cron_expr and result.returncode == 0:
+                # Insert cron into frontmatter
+                text = dst.read_text(encoding="utf-8")
+                if "cron:" not in text:
+                    # Insert after the opening ---
+                    text = text.replace("---\n", f"---\ncron: \"{cron_expr}\"\n", 1)
+                    dst.write_text(text)
+                print(f"  added: {job_name} (schedule: {cron_expr})")
+            else:
+                print(f"  added: {job_name} (could not interpret schedule — edit manually)")
+        else:
+            print(f"  added: {job_name} (claude not found — set cron manually)")
+    else:
+        print(f"  added: {job_name}")
+    print(f"  path: {dst}")
+    print(f"  test: clauck fire {job_name}")
+
+
+def cmd_doctor(interactive: bool = False, context: str = "") -> None:
     """Spawn a clauck-work diagnostic session."""
     claude_bin = _find_claude()
     if not claude_bin:
@@ -492,6 +554,9 @@ Check in order:
 For each issue found: explain the root cause, attempt a fix if safe, report what you did.
 For issues needing user input: explain what's needed and how to fix it.
 If everything is healthy, say so concisely."""
+
+    if context:
+        prompt += f"\n\n## User-provided context\n\n{context}"
 
     if interactive:
         # Run diagnostic, then open interactive session for follow-up
@@ -641,8 +706,31 @@ def main() -> None:
         cmd_version()
     elif cmd == "peek":
         cmd_peek()
+    elif cmd == "add" and rest:
+        add_path = ""
+        add_name = ""
+        add_when = ""
+        i = 0
+        while i < len(rest):
+            if rest[i] == "--name" and i + 1 < len(rest):
+                add_name = rest[i + 1]
+                i += 2
+            elif rest[i] == "--when" and i + 1 < len(rest):
+                add_when = rest[i + 1]
+                i += 2
+            elif not add_path:
+                add_path = rest[i]
+                i += 1
+            else:
+                i += 1
+        if not add_path:
+            die("usage: clauck add <path> [--name NAME] [--when \"schedule\"]")
+        cmd_add(add_path, name=add_name, when=add_when)
     elif cmd == "doctor":
-        cmd_doctor(interactive=("-i" in rest or "--interactive" in rest))
+        interactive = "-i" in rest or "--interactive" in rest
+        # Filter out flags, join remaining as context
+        context_parts = [r for r in rest if not r.startswith("-")]
+        cmd_doctor(interactive=interactive, context=" ".join(context_parts))
     elif cmd == "work":
         # `clauck work <text>` is an explicit alias for semantic fallthrough,
         # avoiding conflicts if semantic text starts with a subcommand name.
