@@ -103,7 +103,7 @@ The marketplace at `~/.claude/skills/clauck/marketplace/` ships curated job prom
 2. Show the user a compact summary of matching jobs with their `one_line`, `cost_per_run_usd_approx`, `requires.mcps`, and `schedule`.
 3. When the user picks one, **read the source `.md` file** and look for a `<!-- CUSTOMIZE BEFORE INSTALLING: -->` comment block. Walk the user through each customization (ask for the specific channel ID / path / etc.), and edit the copy in memory.
 4. Copy the customized content to `~/.claude/scheduled-jobs/<name>.md`. **Never overwrite an existing job of the same name without asking first.**
-5. Wait ~60s for the scheduler to pick up the new job (`.manifest.json` will regenerate), then ad-hoc fire it to verify: `~/.claude/scheduled-jobs/trigger-job.sh <name>`.
+5. Wait ~60s for the scheduler to pick up the new job (`.manifest.json` will regenerate), then ad-hoc fire it to verify: `~/.claude/scheduled-jobs/trigger-job.sh <name>` (or `clauck fire <name>` for human users).
 6. Tail the resulting log. If exit_code=0 and the expected side-effect happened (Slack post / file written / etc.), report success with the expected schedule and cost.
 7. If it failed, show the user the log excerpt and propose a fix.
 
@@ -406,7 +406,7 @@ One master LaunchAgent, N jobs. Adding a job is dropping a Markdown file.
 |---|---|
 | `~/.claude/scheduled-jobs/scheduler.py` | Discovery + dispatch. Runs every 60s. |
 | `~/.claude/scheduled-jobs/run-job.sh` | Per-job executor (log, preflight, compose runtime context, run claude). |
-| `~/.claude/scheduled-jobs/trigger-job.sh` | Ad-hoc-fire wrapper. Used by other agents that match a semantic hook. |
+| `~/.claude/scheduled-jobs/trigger-job.sh` | Ad-hoc-fire wrapper. Usage: `trigger-job.sh <name> [KEY=VALUE ...]`. KEY=VALUE pairs become `CLAUCK_INPUT_*` env vars in the job's runtime context. |
 | `~/.claude/scheduled-jobs/<name>.md` | A job: YAML frontmatter + prompt body. |
 | `~/.claude/scheduled-jobs-prompt.md` | Global system prompt appended to every job. |
 | `~/.claude/scheduled-jobs/.manifest.json` | Regenerated every tick. All jobs with their `cron`, `semantic_hooks`, and `trigger_command`. |
@@ -614,7 +614,7 @@ Delete the probe when done: `rm ~/.claude/scheduled-jobs/probe.md ~/.claude/sche
 
 1. Create `~/.claude/scheduled-jobs/<name>.md` with the frontmatter schema above and a prompt body describing exactly what this invocation should do.
 2. The scheduler regenerates the manifest within 60 seconds. No `launchctl reload` needed.
-3. Verify with `~/.claude/scheduled-jobs/trigger-job.sh <name>` before waiting for the first cron fire.
+3. Verify with `~/.claude/scheduled-jobs/trigger-job.sh <name>` (or `clauck fire <name>`) before waiting for the first cron fire. Pass `KEY=VALUE` args if the job needs custom inputs for this test run.
 
 **Prompt writing tips** for scheduled jobs (different from interactive prompts):
 
@@ -668,10 +668,36 @@ ls -t ~/.claude/scheduled-jobs/<name>-*.log | head -1 | xargs tail
 ### Ad-hoc fire a job
 
 ```bash
+# Basic fire (agents prefer this form):
 ~/.claude/scheduled-jobs/trigger-job.sh <name>
+
+# Human CLI equivalent (same result):
+clauck fire <name>
 ```
 
 Runtime Context will report `Trigger: adhoc` so the job can distinguish this from a cron fire.
+
+### Pass custom inputs to a job
+
+Any `KEY=VALUE` pairs after the job name are exported as `CLAUCK_INPUT_*` env vars and injected into the job's Runtime Context as a `## Custom inputs (passed via trigger)` section. The job's prompt can read them by name.
+
+```bash
+# Via trigger-job.sh (agents):
+~/.claude/scheduled-jobs/trigger-job.sh <name> FILE_PATH=/tmp/data.json MODE=strict
+
+# Via clauck CLI (humans):
+clauck fire <name> FILE_PATH=/tmp/data.json MODE=strict
+```
+
+Inside the job, the runtime context will contain:
+
+```
+## Custom inputs (passed via trigger)
+- **FILE_PATH:** /tmp/data.json
+- **MODE:** strict
+```
+
+Use this for parametric jobs that process different files or datasets on each trigger, for pipeline stages that receive routing decisions from upstream, or for debug overrides without editing the job file.
 
 ### Edit a job
 

@@ -4,7 +4,10 @@ All notable changes to clauck are documented here. Format follows [Keep a Change
 
 ## [Unreleased]
 
-Nothing yet.
+### Added
+
+- **`clauck fire KEY=VALUE` custom inputs:** `clauck fire <name> [KEY=VALUE ...]` now forwards KEY=VALUE pairs to `trigger-job.sh`, which exports them as `CLAUCK_INPUT_*` env vars injected into the job's Runtime Context. Completes the v1.2.0 intent: the mechanism was implemented in `trigger-job.sh` and `run-job.sh` but the CLI entry point never exposed it. Non-KEY=VALUE extra args produce a warning and are dropped. See [#12](https://github.com/CoreyRDean/clauck/issues/12).
+- **SKILL.md: custom inputs documentation:** Added `### Pass custom inputs to a job` section documenting `KEY=VALUE` syntax for both `trigger-job.sh` (agents) and `clauck fire` (humans), with runtime context example and use-case guidance.
 
 ## [v1.3.0] — 2026-04-14
 

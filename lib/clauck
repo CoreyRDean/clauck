@@ -4,7 +4,7 @@
 Usage:
     clauck list                          Show all jobs with status
     clauck status                        System overview
-    clauck fire <name>                   Ad-hoc trigger a job
+    clauck fire <name> [KEY=VALUE ...]   Ad-hoc trigger a job (with optional custom inputs)
     clauck pause <name>                  Disable a job
     clauck resume <name>                 Re-enable a paused job
     clauck edit <name>                   Open job prompt in your editor
@@ -197,10 +197,21 @@ def cmd_status() -> None:
             pass
 
 
-def cmd_fire(name: str) -> None:
+def cmd_fire(name: str, inputs: list[str] | None = None) -> None:
     if not TRIGGER_SCRIPT.exists():
         die("trigger-job.sh not found")
-    result = subprocess.run([str(TRIGGER_SCRIPT), name], capture_output=True, text=True)
+
+    kv_args: list[str] = []
+    for arg in (inputs or []):
+        if "=" in arg:
+            kv_args.append(arg)
+        else:
+            print(f"  warning: ignoring non-KEY=VALUE argument: {arg!r}", file=sys.stderr)
+
+    if kv_args:
+        print(f"  firing: {name} ({' '.join(kv_args)})")
+
+    result = subprocess.run([str(TRIGGER_SCRIPT), name] + kv_args, capture_output=True, text=True)
     print(result.stdout.strip())
     if result.returncode != 0:
         print(result.stderr.strip(), file=sys.stderr)
@@ -679,7 +690,7 @@ def main() -> None:
     elif cmd == "status":
         cmd_status()
     elif cmd == "fire" and rest:
-        cmd_fire(rest[0])
+        cmd_fire(rest[0], rest[1:] if len(rest) > 1 else None)
     elif cmd == "pause" and rest:
         cmd_pause(rest[0])
     elif cmd == "resume" and rest:
