@@ -34,6 +34,7 @@ set -euo pipefail
 # Repo defaults to whatever was set during installation (persisted in config file).
 # Env var override takes precedence for ad-hoc testing.
 _CONFIG_REPO=""
+_CONFIG_CHANNEL=""
 _CFG="$HOME/.claude/scheduled-jobs/.clauck.config.json"
 if [ -f "$_CFG" ]; then
     _CONFIG_REPO=$(/usr/bin/python3 -c "
@@ -41,8 +42,18 @@ import json, sys
 try: print(json.load(open('$_CFG')).get('repo',''))
 except: pass
 " 2>/dev/null || true)
+    _CONFIG_CHANNEL=$(/usr/bin/python3 -c "
+import json, sys
+try:
+    d = json.load(open('$_CFG'))
+    print(d.get('auto_update', {}).get('channel', ''))
+except: pass
+" 2>/dev/null || true)
 fi
 REPO="${CLAUCK_REPO:-${_CONFIG_REPO:-CoreyRDean/clauck}}"
+# Channel: stable (default), nightly, or local. local = dev tree install,
+# skip update checks entirely.
+CHANNEL="${CLAUCK_CHANNEL:-${_CONFIG_CHANNEL:-stable}}"
 
 STATE_DIR="$HOME/.claude/scheduled-jobs/.state"
 VERSION_FILE="$HOME/.claude/scheduled-jobs/.version"
@@ -97,18 +108,54 @@ else
 fi
 
 # ──────────────────────────────────────────────────────────────────────────
-# Fetch latest release tag
+# Channel gate
+# ──────────────────────────────────────────────────────────────────────────
+# local-channel installs were built from a developer's working tree. We
+# can't meaningfully compare against published releases — the tag on disk
+# bears no relation to what's on GitHub. Skip the check entirely so we
+# don't spam fake "update available" markers.
+
+if [ "$CHANNEL" = "local" ]; then
+    rm -f "$AVAILABLE_FILE"
+    date +%s > "$LAST_CHECK_FILE"
+    log "✓ local build — update check skipped ($INSTALLED)"
+    log "  (this install was built from a local checkout; update via your repo instead)"
+    exit 0
+fi
+
+# ──────────────────────────────────────────────────────────────────────────
+# Fetch latest tag for the selected channel
 # Uses unauthenticated GitHub API (60 req/hr/IP — far more than we'd ever use).
 # Falls back to `gh` if available and curl fails.
+#
+# Channel → endpoint:
+#   stable  → /releases/latest    (GitHub auto-filters prereleases out)
+#   nightly → /releases (paged)   (we pick the first prerelease=true entry,
+#                                  which is the newest by published_at desc)
+#
+# Nightly tags are immutable and timestamped: v{VERSION}-{unix_ts}.
+# We treat the tag name itself as the comparison key — newer nightlies have
+# strictly greater timestamps, so simple string inequality detects an update.
 # ──────────────────────────────────────────────────────────────────────────
 
 LATEST_TAG=""
-API_URL="https://api.github.com/repos/$REPO/releases/latest"
+LATEST_SHA=""
+if [ "$CHANNEL" = "stable" ]; then
+    API_URL="https://api.github.com/repos/$REPO/releases/latest"
+else
+    API_URL="https://api.github.com/repos/$REPO/releases?per_page=20"
+fi
+
+if [ "$CHANNEL" != "stable" ] && [ "$CHANNEL" != "nightly" ]; then
+    err "unknown channel: $CHANNEL (valid: stable, nightly, local)"
+    exit 2
+fi
 
 if command -v curl >/dev/null 2>&1; then
     RESPONSE="$(curl -fsSL --max-time 10 -H 'Accept: application/vnd.github+json' "$API_URL" 2>/dev/null || true)"
     if [ -n "$RESPONSE" ]; then
-        LATEST_TAG="$(/usr/bin/python3 -c '
+        if [ "$CHANNEL" = "stable" ]; then
+            LATEST_TAG="$(/usr/bin/python3 -c '
 import json, sys
 try:
     d = json.loads(sys.stdin.read())
@@ -116,29 +163,62 @@ try:
 except Exception:
     print("")
 ' <<<"$RESPONSE")"
+        else
+            # Find newest prerelease in the page. The /releases endpoint
+            # returns sorted by created_at desc, so the first prerelease
+            # entry is what we want.
+            read -r LATEST_TAG LATEST_SHA <<<"$(/usr/bin/python3 -c '
+import json, sys
+try:
+    arr = json.loads(sys.stdin.read())
+    if not isinstance(arr, list):
+        arr = []
+    for r in arr:
+        if r.get("prerelease"):
+            tag = r.get("tag_name", "")
+            sha = r.get("target_commitish", "") or r.get("published_at", "")
+            print(f"{tag} {sha}")
+            break
+    else:
+        print(" ")
+except Exception:
+    print(" ")
+' <<<"$RESPONSE")"
+        fi
     fi
 fi
 
 if [ -z "$LATEST_TAG" ] && command -v gh >/dev/null 2>&1; then
     # gh is authenticated and provides a nicer interface; try as fallback.
-    LATEST_TAG="$(gh release view --repo "$REPO" --json tagName --jq .tagName 2>/dev/null || true)"
+    if [ "$CHANNEL" = "stable" ]; then
+        LATEST_TAG="$(gh release view --repo "$REPO" --json tagName --jq .tagName 2>/dev/null || true)"
+    else
+        # gh release list returns most recent first; filter to prereleases.
+        LATEST_TAG="$(gh release list --repo "$REPO" --limit 20 --json tagName,isPrerelease \
+            --jq 'map(select(.isPrerelease))[0].tagName' 2>/dev/null || true)"
+    fi
 fi
 
 date +%s > "$LAST_CHECK_FILE"
 
 if [ -z "$LATEST_TAG" ]; then
-    err "could not fetch latest release from https://github.com/$REPO"
-    err "(this is usually transient — check your network, or see if the repo has any releases yet)"
+    err "could not fetch latest $CHANNEL release from https://github.com/$REPO"
+    err "(this is usually transient — check your network, or see if the repo has a '$CHANNEL' release yet)"
     exit 1
 fi
 
 # ──────────────────────────────────────────────────────────────────────────
 # Compare
 # ──────────────────────────────────────────────────────────────────────────
+# Stable: simple tag equality (v1.5.6 vs v1.5.7).
+# Nightly: tag names are timestamped (v1.5.7-1681580000) and immutable, so
+#   simple inequality detects an update. We still compare to the installed
+#   tag stored in .version (which is rewritten on every install/apply to
+#   the actual tag pulled, not the VERSION-file value).
 
 if [ "$INSTALLED" = "$LATEST_TAG" ]; then
     rm -f "$AVAILABLE_FILE"
-    log "✓ up-to-date ($INSTALLED)"
+    log "✓ up-to-date on $CHANNEL ($INSTALLED)"
     exit 0
 fi
 
@@ -147,18 +227,24 @@ cat > "$AVAILABLE_FILE" <<EOF
 {
   "installed": "$INSTALLED",
   "latest": "$LATEST_TAG",
+  "channel": "$CHANNEL",
+  "latest_sha": "$LATEST_SHA",
   "detected_at": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
   "release_url": "https://github.com/$REPO/releases/tag/$LATEST_TAG"
 }
 EOF
 
-log "update available: $INSTALLED → $LATEST_TAG"
+if [ "$CHANNEL" = "nightly" ]; then
+    log "nightly update available ($INSTALLED @ $CURRENT_NIGHTLY_SHA → @ $LATEST_SHA)"
+else
+    log "update available: $INSTALLED → $LATEST_TAG"
+fi
 log "release notes:    https://github.com/$REPO/releases/tag/$LATEST_TAG"
 
 if [ "$APPLY" -eq 0 ]; then
     log ""
     log "To install this release now, run:"
-    log "  bash <(curl -fsSL https://raw.githubusercontent.com/$REPO/$LATEST_TAG/install.sh)"
+    log "  clauck update --apply"
     log ""
     log "To enable auto-apply (applies new releases automatically), edit:"
     log "  $CONFIG_FILE"
@@ -166,13 +252,14 @@ if [ "$APPLY" -eq 0 ]; then
 fi
 
 # ──────────────────────────────────────────────────────────────────────────
-# Apply: run install.sh from the new release tag
+# Apply: run install.sh from the target ref (release tag for stable,
+# nightly tag for nightly channel).
 # ──────────────────────────────────────────────────────────────────────────
 
-log "applying update $INSTALLED → $LATEST_TAG ..."
-# Fetch install.sh from main HEAD (always has the latest bug fixes for the
-# install process itself). The CLAUCK_BRANCH env var tells the
-# installer to clone the release TAG for the actual payload files.
+log "applying $CHANNEL update $INSTALLED → $LATEST_TAG ..."
+# Fetch install.sh from main HEAD — it always has the latest bug fixes for
+# the install process itself. CLAUCK_BRANCH tells the installer which ref
+# to clone for the payload files.
 INSTALLER_URL="https://raw.githubusercontent.com/$REPO/main/install.sh"
 TMP_INSTALLER="$(mktemp /tmp/clauck-install.XXXXXX.sh)"
 trap 'rm -f "$TMP_INSTALLER"' EXIT
@@ -182,11 +269,11 @@ if ! curl -fsSL --max-time 30 "$INSTALLER_URL" -o "$TMP_INSTALLER"; then
     exit 3
 fi
 
-# Pass --yes so the installer doesn't prompt (we're non-interactive),
-# and the branch env var so it clones the release tag, not main.
-if CLAUCK_BRANCH="$LATEST_TAG" bash "$TMP_INSTALLER" --yes; then
+# For stable, use the release tag. For nightly, use the nightly tag itself
+# (GitHub resolves it to the current main HEAD at apply time).
+if CLAUCK_BRANCH="$LATEST_TAG" bash "$TMP_INSTALLER" --yes --channel="$CHANNEL"; then
     rm -f "$AVAILABLE_FILE"
-    log "✓ update applied; now on $LATEST_TAG"
+    log "✓ $CHANNEL update applied; now on $LATEST_TAG"
     exit 0
 else
     err "installer exited non-zero; your prior install should still be intact"

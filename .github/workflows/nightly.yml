@@ -1,0 +1,130 @@
+name: nightly
+
+# Cut a nightly pre-release from main HEAD. Each refresh creates a new
+# immutable tag in the form `v{VERSION}-{unix_ts}` (e.g. v1.5.7-1681580000)
+# so tags sort chronologically and SemVer-correctly remain pre-release of
+# the upcoming stable v{VERSION} release.
+#
+# Tag scheme rationale:
+#   v1.5.6              — last stable release
+#   v1.5.7-1681580000   — nightly cut on 2026-04-15 (pre-release of v1.5.7)
+#   v1.5.7-1681666400   — nightly cut on 2026-04-16 (newer nightly, same target)
+#   v1.5.7              — eventual stable release of the work nightlies tracked
+#
+# SemVer treats `-{ts}` as a pre-release identifier, so v1.5.7-X < v1.5.7
+# in version ordering, which is correct: every nightly is a pre-release
+# leading up to the stable cut. Update-check sorts by published_at to
+# pick "newest pre-release" for the nightly channel.
+#
+# VERSION bumps happen manually in the first commit after a stable
+# release (so all nightlies between v1.5.6 and v1.5.7 carry "v1.5.7-{ts}").
+# Mid-cycle tier bumps (e.g. major refactor → v1.6.0) are also manual.
+#
+# Skips no-op runs: if the most recent nightly tag points at the current
+# main HEAD, nothing gets published.
+
+on:
+  schedule:
+    - cron: "0 7 * * *"
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+
+jobs:
+  publish-nightly:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+
+      - name: Compute target tag
+        id: target
+        run: |
+          if [ ! -f VERSION ]; then
+            echo "VERSION file missing — cannot derive nightly tag" >&2
+            exit 1
+          fi
+          BASE_VERSION=$(cat VERSION | tr -d '[:space:]')
+          # Strip any leading 'v' so we control the format.
+          BASE_VERSION="${BASE_VERSION#v}"
+          UNIX_TS=$(date -u +%s)
+          NEW_TAG="v${BASE_VERSION}-${UNIX_TS}"
+          MAIN_SHA=$(git rev-parse main)
+
+          # Find the most recent v*-* tag (newest by creation date).
+          # If it points at the same SHA as main HEAD, this is a no-op
+          # — nothing on main has changed since the last nightly.
+          LATEST_NIGHTLY_TAG=$(git for-each-ref \
+              --sort=-creatordate \
+              --format='%(refname:short)' \
+              'refs/tags/v*-*' \
+              | head -1)
+          LATEST_NIGHTLY_SHA=""
+          if [ -n "$LATEST_NIGHTLY_TAG" ]; then
+              LATEST_NIGHTLY_SHA=$(git rev-list -n 1 "$LATEST_NIGHTLY_TAG")
+          fi
+
+          echo "base_version=$BASE_VERSION" >> "$GITHUB_OUTPUT"
+          echo "new_tag=$NEW_TAG"           >> "$GITHUB_OUTPUT"
+          echo "main_sha=$MAIN_SHA"         >> "$GITHUB_OUTPUT"
+          echo "latest_nightly_tag=$LATEST_NIGHTLY_TAG" >> "$GITHUB_OUTPUT"
+          echo "latest_nightly_sha=$LATEST_NIGHTLY_SHA" >> "$GITHUB_OUTPUT"
+
+          if [ "$LATEST_NIGHTLY_SHA" = "$MAIN_SHA" ]; then
+            echo "up_to_date=true"  >> "$GITHUB_OUTPUT"
+            echo "Latest nightly $LATEST_NIGHTLY_TAG already at main HEAD ($MAIN_SHA); skipping."
+          else
+            echo "up_to_date=false" >> "$GITHUB_OUTPUT"
+            echo "Will tag main HEAD ($MAIN_SHA) as $NEW_TAG (previous nightly was $LATEST_NIGHTLY_TAG @ $LATEST_NIGHTLY_SHA)"
+          fi
+
+      - name: Tag main HEAD with timestamped pre-release
+        if: steps.target.outputs.up_to_date == 'false'
+        env:
+          NEW_TAG: ${{ steps.target.outputs.new_tag }}
+        run: |
+          git tag -a "$NEW_TAG" main -m "nightly: $NEW_TAG"
+          git push origin "refs/tags/$NEW_TAG"
+
+      - name: Publish pre-release
+        if: steps.target.outputs.up_to_date == 'false'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          MAIN_SHA: ${{ steps.target.outputs.main_sha }}
+          NEW_TAG: ${{ steps.target.outputs.new_tag }}
+          BASE_VERSION: ${{ steps.target.outputs.base_version }}
+        run: |
+          SHORT_SHA=$(git rev-parse --short=8 main)
+          DATE=$(date -u +%Y-%m-%d)
+          TITLE="nightly ${NEW_TAG}"
+          BODY="Rolling pre-release of upcoming v${BASE_VERSION} stable. Tracks main HEAD.
+
+          - Commit: [${SHORT_SHA}](https://github.com/${REPO}/commit/${MAIN_SHA})
+          - Built: ${DATE}
+          - Tag:   \`${NEW_TAG}\`
+
+          **Switch an existing install to nightly:**
+          \`\`\`sh
+          clauck config set auto_update.channel nightly
+          clauck update --apply
+          \`\`\`
+
+          **Fresh nightly install:**
+          \`\`\`sh
+          curl -sSL https://raw.githubusercontent.com/${REPO}/main/install.sh \\
+            | bash -s -- --channel=nightly
+          \`\`\`
+
+          See [RELEASES.md](https://github.com/${REPO}/blob/main/RELEASES.md) for channel
+          details. Compare against the last stable in the
+          [diff](https://github.com/${REPO}/compare/v${BASE_VERSION%.*}...${NEW_TAG})."
+          gh release create "$NEW_TAG" \
+            --title      "$TITLE" \
+            --notes      "$BODY" \
+            --prerelease \
+            --target main

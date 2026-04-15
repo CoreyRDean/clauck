@@ -765,8 +765,52 @@ def cmd_peek() -> None:
 
 
 def cmd_version() -> None:
+    """Show version + build-source metadata.
+
+    The stable case (user installed a tagged release) prints one line. Any
+    non-stable install (local dev tree, nightly) adds provenance lines so
+    the user can tell what they're actually running — critical when files
+    diverge from the tag nominally recorded in .version.
+    """
     v = VERSION_FILE.read_text().strip() if VERSION_FILE.exists() else "unknown"
-    print(f"clauck {v}")
+
+    # .build-source is written by install.sh. Absence means a very old
+    # install that predates channels — safely assume stable/release.
+    build_source_path = JOBS_DIR / ".build-source"
+    build: dict = {}
+    if build_source_path.exists():
+        try:
+            build = json.loads(build_source_path.read_text())
+        except (OSError, ValueError):
+            build = {}
+
+    channel = build.get("channel") or "stable"
+    source = build.get("source") or "release"
+    git_sha = build.get("git_sha")
+    installed_at = build.get("installed_at", "")
+    repo = build.get("repo", "CoreyRDean/clauck")
+
+    # Stable-release default: one-line output, no noise.
+    if channel == "stable" and source == "release" and not git_sha:
+        print(f"clauck {v}")
+        return
+
+    # Non-stable installs: print provenance so the user isn't confused
+    # about why `clauck version` says v1.5.6 but the behavior differs
+    # from a real v1.5.6 release.
+    print(f"clauck {v}  [{channel}]")
+    if source == "local":
+        sha_str = f" @ {git_sha}" if git_sha else ""
+        print(f"  source: local checkout{sha_str}")
+        print(f"  note:   update checks disabled for local builds")
+    elif source == "nightly":
+        sha_str = f" @ {git_sha}" if git_sha else ""
+        print(f"  source: nightly{sha_str}")
+    else:
+        print(f"  source: {source}")
+    if installed_at:
+        print(f"  installed: {installed_at}")
+    print(f"  repo:      {repo}")
 
 
 def cmd_add(path: str, name: str = "", when: str = "") -> None:
@@ -1435,7 +1479,11 @@ The `enhanced_prompt` is what the execution agent receives. It must:
 Return ONLY valid JSON, no markdown fencing, no explanation:
 
 For deterministic:
-{{"command_type": "deterministic", "interpretation": "<distilled CLI directive>", "deterministic_cmd": "clauck fire jobA SOURCE_PATH=/x"}}
+{{"command_type": "deterministic", "interpretation": "<distilled CLI directive>", "deterministic_argv": ["clauck", "fire", "jobA", "KEY=value"]}}
+
+**CRITICAL — use `deterministic_argv` (JSON array), NOT a single string, whenever any arg value contains spaces, quotes, newlines, or shell metacharacters.** Each token is ONE element of the array. Multi-word arg values go in ONE element: `"SOURCE_CONTENT=This is a long source document."`, not split across multiple elements. There is no shell tokenization pass — what you put in the array is what the CLI receives.
+
+Single-string `deterministic_cmd` is still accepted for simple cases (`"clauck list"`, `"clauck fire jobA"`), parsed with shell-style quoting. Prefer `deterministic_argv` by default — it cannot be misparsed.
 
 For semantic:
 {{"command_type": "semantic", "interpretation": "<distilled CLI directive>", "enhanced_prompt": "<prescriptive task brief>", "exec_model": "haiku"|"sonnet"|"opus", "exec_effort": "low"|"medium"|"high", "exec_max_turns": <int>, "exec_max_budget_usd": <float>}}"""
@@ -1607,12 +1655,40 @@ def cmd_semantic(text: str) -> None:
         spinner_running[0] = False
         spin_thread.join(timeout=0.5)
         print(f"  \u2192 {interpretation}")
-        det_cmd = routing.get("deterministic_cmd", "").strip()
-        if not det_cmd:
-            die("interpreter returned deterministic but no command")
 
-        # Parse the deterministic command — it should start with "clauck ..."
-        parts = det_cmd.split()
+        # Two supported formats from the interpreter, in priority order:
+        #
+        # 1. `deterministic_argv`: a JSON array of tokens, e.g.
+        #    ["clauck", "fire", "pe-pipeline", "SOURCE_CONTENT=long text with spaces"]
+        #    This is the preferred format because it's unambiguous — no
+        #    tokenization pass, no quoting rules for the model to get right.
+        #
+        # 2. `deterministic_cmd`: a single shell-style string (legacy).
+        #    We parse with shlex.split so quoted values survive:
+        #    `clauck fire pe-pipeline SOURCE_CONTENT="long text with spaces"`
+        #    A naive .split() (which this used to do) truncated multi-word
+        #    arg values at the first space, causing pipelines like pe-pipeline
+        #    to receive only the first word of SOURCE_CONTENT.
+        argv = routing.get("deterministic_argv")
+        if isinstance(argv, list) and argv:
+            parts = [str(a) for a in argv]
+        else:
+            det_cmd = routing.get("deterministic_cmd", "").strip()
+            if not det_cmd:
+                die("interpreter returned deterministic but no command/argv")
+            import shlex as _shlex
+            try:
+                parts = _shlex.split(det_cmd)
+            except ValueError as e:
+                # Malformed quoting. Fall back to naive split with a loud
+                # warning so the bug is visible, not silent truncation.
+                print(
+                    f"  ! shlex parse failed ({e}); falling back to naive split — "
+                    f"multi-word arg values will be truncated",
+                    file=sys.stderr,
+                )
+                parts = det_cmd.split()
+
         if parts and parts[0] == "clauck":
             parts = parts[1:]
         if parts and parts[0] == "bash":
@@ -1627,7 +1703,7 @@ def cmd_semantic(text: str) -> None:
             sys.argv = ["clauck"] + parts
             main()
         else:
-            die(f"could not parse deterministic command: {det_cmd}")
+            die(f"could not parse deterministic command: argv={argv!r} cmd={routing.get('deterministic_cmd', '')!r}")
         return
 
     # semantic path — run execution pass with interpreter-chosen parameters

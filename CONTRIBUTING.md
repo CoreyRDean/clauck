@@ -20,7 +20,8 @@ The installer uses the local `lib/`, `jobs/`, and `skill/` directories when it d
 
 ## Branch and commit conventions
 
-- **`main`** is the stable branch. All PRs target `main`.
+- **`main`** is the single long-lived branch. All PRs target `main`. HEAD on `main` may contain unreleased work — this is intentional. The nightly channel ([RELEASES.md](RELEASES.md)) exists so test users can track main HEAD safely; the stable channel pins to tagged commits.
+- Feature branches live only for the lifetime of their PR. Do not maintain a long-lived `dev` or `develop` branch.
 - Commits follow [Conventional Commits](https://www.conventionalcommits.org/en/v1.0.0/) format:
   ```
   feat: add file_changed external trigger type
@@ -48,7 +49,6 @@ The installer uses the local `lib/`, `jobs/`, and `skill/` directories when it d
 
 - [ ] `install.sh` still installs cleanly on a fresh system (test with `HOME=/tmp/test-install`)
 - [ ] Existing jobs aren't broken by the change
-- [ ] CHANGELOG.md updated under `[Unreleased]` if user-facing
 - [ ] No secrets, API keys, or personal paths committed
 
 ## Adding a job to the marketplace
@@ -117,15 +117,19 @@ Changes to `scheduler.py`, `run-job.sh`, `trigger-job.sh`, `install.sh`, or `uni
 
 ## Releases
 
-Only the maintainer cuts releases. The process:
+See [RELEASES.md](RELEASES.md) for the full release channel architecture (stable / nightly / local) and why branch topology is intentionally flat.
 
-1. Move `[Unreleased]` items in CHANGELOG.md to a new dated section.
-2. Update `VERSION` file.
-3. Commit: `chore: release vX.Y.Z`
-4. Push to `main`.
-5. `gh release create vX.Y.Z --title "vX.Y.Z — <tagline>" --notes-file CHANGELOG_EXCERPT.md`
+**Stable release (maintainer only):**
 
-Releases are how the auto-updater discovers new versions. Pushes to `main` alone never trigger user updates.
+1. Verify `VERSION` is the version you want to release (it should already match — `VERSION` is bumped in the *first* commit after the previous release, so by the time you cut the next one it's been carrying the target value through the whole development cycle).
+2. Tag the stable point: `git tag -a vX.Y.Z main -m "vX.Y.Z" && git push origin vX.Y.Z`
+3. `gh release create vX.Y.Z --title "vX.Y.Z — <tagline>" --notes "..."` — **not** a prerelease. GitHub's `/releases/latest` API excludes prereleases, so stable-channel users only see non-prerelease tags.
+4. Write the release body inline. The GitHub Releases page is the changelog of record.
+5. **Immediately after release:** in the next commit on main, bump `VERSION` to the next target (e.g. `v1.5.7` → `v1.5.8`). Mid-cycle tier bumps (significant feature warranting `v1.6.0`) are allowed but should not happen multiple times per cycle.
+
+**Nightly release:** automated by `.github/workflows/nightly.yml`. Tags main HEAD as `v{VERSION}-{unix_ts}` (e.g. `v1.5.7-1681580000`) daily at 07:00 UTC and publishes a pre-release. SemVer-correct: `v1.5.7-anything < v1.5.7`, so nightlies sort below the stable they're tracking, and chronologically among each other by timestamp. No-op refreshes (unchanged main) are skipped. No manual action required.
+
+Pushes to `main` without a stable tag never trigger stable-channel updates. They do feed the nightly channel on the next scheduled GHA run (or immediate `workflow_dispatch`).
 
 ## Code of conduct
 

@@ -29,16 +29,34 @@ REPO_BRANCH="${CLAUCK_BRANCH:-main}"
 
 DRY_RUN=0
 AUTO_YES=0
+# Channel: stable (default), nightly, or local. When installing from a local
+# checkout, auto-overridden to "local" unless the user explicitly passed one.
+# "local" installs don't participate in the auto-update flow — treating a
+# dev-tree install as a tagged release would produce confusing "up-to-date"
+# or "update-available" signals depending on the fork's head position.
+CHANNEL=""
+CHANNEL_EXPLICIT=0
 for arg in "$@"; do
     case "$arg" in
         --dry-run)  DRY_RUN=1 ;;
         --yes|-y)   AUTO_YES=1 ;;
+        --channel=*)
+            CHANNEL="${arg#--channel=}"
+            CHANNEL_EXPLICIT=1
+            ;;
+        --channel)
+            echo "--channel requires a value (stable|nightly|local). Use --channel=<value>." >&2
+            exit 2
+            ;;
         --help|-h)
             cat <<HELP
-Usage: install.sh [--dry-run] [--yes]
+Usage: install.sh [--dry-run] [--yes] [--channel=stable|nightly|local]
 
-  --dry-run   Show what would be done without writing any files.
-  --yes       Accept all defaults without prompting (for automation).
+  --dry-run          Show what would be done without writing any files.
+  --yes              Accept all defaults without prompting (for automation).
+  --channel=<name>   Update channel: stable (default), nightly, or local.
+                     When installing from a local checkout, defaults to "local"
+                     unless this flag is explicitly set.
 
 Environment variables:
   CLAUCK_REPO     Git clone URL (default: $REPO_URL)
@@ -48,6 +66,14 @@ HELP
             ;;
     esac
 done
+
+case "$CHANNEL" in
+    ""|stable|nightly|local) ;;
+    *)
+        echo "invalid --channel: $CHANNEL (valid: stable, nightly, local)" >&2
+        exit 2
+        ;;
+esac
 
 # ──────────────────────────────────────────────────────────────────────────
 # Output helpers
@@ -224,10 +250,81 @@ install_files() {
     install_file "$repo/uninstall.sh"                 "$HOME/.claude/scheduled-jobs/uninstall.sh"   755
 
     # Record the installed version for the auto-updater.
-    if [ -f "$repo/VERSION" ]; then
-        cp "$repo/VERSION" "$HOME/.claude/scheduled-jobs/.version"
-        ok "recorded version: $(cat "$HOME/.claude/scheduled-jobs/.version" | tr -d '[:space:]')"
+    #
+    # The recorded value should be the actual tag this install came from,
+    # not just the contents of the VERSION file. This matters for nightlies:
+    # a nightly cut from main HEAD has VERSION = "v1.5.7" but the tag is
+    # "v1.5.7-1681580000". Update-check compares .version to the latest
+    # nightly tag, so .version must hold the timestamped form for nightly
+    # installs to detect successive nightlies.
+    #
+    # Precedence: CLAUCK_BRANCH (if it looks like a tag) > VERSION file.
+    local recorded_version=""
+    case "$REPO_BRANCH" in
+        v[0-9]*) recorded_version="$REPO_BRANCH" ;;
+    esac
+    if [ -z "$recorded_version" ] && [ -f "$repo/VERSION" ]; then
+        recorded_version="$(cat "$repo/VERSION" | tr -d '[:space:]')"
     fi
+    if [ -n "$recorded_version" ]; then
+        if [ "$DRY_RUN" -eq 0 ]; then
+            printf '%s\n' "$recorded_version" > "$HOME/.claude/scheduled-jobs/.version"
+        fi
+        ok "recorded version: $recorded_version"
+    fi
+
+    # Record the build source so `clauck version` and update-check can tell
+    # a local-tree install from a release install, and so update-check picks
+    # the right channel (stable release tag vs rolling nightly tag).
+    local source_type="release"
+    local git_sha="null"
+    # $2 is install source from caller: "local" or "clone"; default to clone.
+    if [ "${2:-clone}" = "local" ]; then
+        source_type="local"
+        # Try to capture the git SHA from the working tree for traceability.
+        if command -v git >/dev/null 2>&1 && [ -d "$repo/.git" ]; then
+            git_sha="\"$(cd "$repo" && git rev-parse HEAD 2>/dev/null || echo unknown)\""
+            local dirty
+            dirty="$(cd "$repo" && git status --porcelain 2>/dev/null | head -1 || true)"
+            if [ -n "$dirty" ]; then
+                git_sha="\"$(cd "$repo" && git rev-parse HEAD 2>/dev/null || echo unknown)-dirty\""
+            fi
+        fi
+    elif [ "$CHANNEL" = "nightly" ] || [ "$REPO_BRANCH" = "nightly" ]; then
+        source_type="nightly"
+        if command -v git >/dev/null 2>&1 && [ -d "$repo/.git" ]; then
+            git_sha="\"$(cd "$repo" && git rev-parse HEAD 2>/dev/null || echo unknown)\""
+        fi
+    fi
+
+    # Resolve the effective channel at this point. If the user didn't pass
+    # --channel explicitly, infer from the source type (local → local,
+    # nightly → nightly, release → stable).
+    local effective_channel="$CHANNEL"
+    if [ -z "$effective_channel" ]; then
+        case "$source_type" in
+            local)   effective_channel="local" ;;
+            nightly) effective_channel="nightly" ;;
+            *)       effective_channel="stable" ;;
+        esac
+    fi
+
+    local bs_dst="$HOME/.claude/scheduled-jobs/.build-source"
+    if [ "$DRY_RUN" -eq 0 ]; then
+        local bs_ts
+        bs_ts="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+        cat > "$bs_dst" <<BSEOF
+{
+  "channel": "$effective_channel",
+  "source": "$source_type",
+  "git_sha": $git_sha,
+  "installed_at": "$bs_ts",
+  "repo": "$(echo "$REPO_URL" | sed 's|.*github\.com/||; s|\.git$||')",
+  "branch": "$REPO_BRANCH"
+}
+BSEOF
+    fi
+    ok "recorded build source: channel=$effective_channel, source=$source_type"
 
     # Write config: respect auto-update prompt decision + persist fork URL.
     # Never overwrite an existing config — user preferences are sacrosanct.
@@ -247,12 +344,13 @@ install_files() {
   "auto_update": {
     "enabled": $auto_enabled,
     "check_interval_seconds": 3600,
-    "auto_apply": false
+    "auto_apply": false,
+    "channel": "$effective_channel"
   }
 }
 CFGEOF
         fi
-        ok "wrote config: $cfg_dst (auto_update.enabled=$auto_enabled, repo=$repo_short)"
+        ok "wrote config: $cfg_dst (auto_update.enabled=$auto_enabled, channel=$effective_channel, repo=$repo_short)"
     fi
 
     section "Installing skill"
@@ -565,6 +663,14 @@ main() {
     repo="$(resolve_repo)" || die "could not locate repo source" 1
     ok "source: $repo"
 
+    # Classify the install source. A /tmp/clauck.* path came from resolve_repo's
+    # clone path (curl | bash). Anything else is a local checkout — the user ran
+    # `bash install.sh` from their own working tree.
+    local install_source="clone"
+    if [[ "$repo" != /tmp/clauck.* ]]; then
+        install_source="local"
+    fi
+
     # If resolve_repo cloned into /tmp, register cleanup for when the installer exits.
     if [[ "$repo" == /tmp/* ]]; then
         local tmproot="${repo%/repo}"  # /tmp/clauck.XXXXX
@@ -575,7 +681,7 @@ main() {
     prompt_auto_update
 
     make_dirs
-    install_files "$repo"
+    install_files "$repo" "$install_source"
     install_plist "$repo"
     patch_settings
     verify

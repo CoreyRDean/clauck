@@ -15,5 +15,4 @@
 - [ ] `bash -n install.sh && bash -n uninstall.sh` passes
 - [ ] `python3 -c "import ast; ast.parse(open('lib/scheduler.py').read())"` passes
 - [ ] Tested `install.sh` on a clean-ish environment (or `--dry-run`)
-- [ ] CHANGELOG.md updated under `[Unreleased]` (if user-facing)
 - [ ] No secrets, personal paths, or API keys committed
