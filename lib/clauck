@@ -1090,16 +1090,39 @@ Your job: read the user's context and decide how much firepower the diagnostic s
 # User context
 {ctx_line}
 
-# Complexity rubric
+# How to size the session
 
-- **Trivial** (system looks healthy, user wants a quick status check, specific known-good question):
-  haiku, low effort, 5 turns, $0.10
-- **Standard** (general diagnostic sweep with fixes, unclear failure, most real-world invocations):
-  sonnet, medium effort, 20 turns, $0.60
-- **Complex** (multi-job pipeline failure, producer graph broken, DAG investigation across many logs, deep architectural suspicion):
-  sonnet, high effort, 40 turns, $1.50
+Reason from the specific context, not from tiers. No two invocations have identical shapes.
 
-Lean toward Standard if uncertain — doctor is usually asked when something is already weird.
+**Think about what the session will actually do.** Doctor is a diagnostic session that reads files, inspects state, and optionally applies fixes. Each Read call is ~1–3k tokens on a small file, more on a large log. Each Bash call with a long stdout return costs more. Multi-step investigations multiply tool calls.
+
+**Cost anchors** (approximate, for your sizing intuition):
+- haiku: $1/M input, $5/M output, fast. Good for grep-and-report, known-good checks, small-surface lookups.
+- sonnet: $3/M input, $15/M output. Good for investigation that requires synthesis across several files or layered reasoning about state.
+- A single Read of a 100-line log is ~$0.005 on haiku, ~$0.015 on sonnet.
+- Tool-call overhead + system prompt + reasoning padding roughly doubles raw read cost.
+- Typical haiku tool-chain turn lands ~$0.02. Typical sonnet turn ~$0.08.
+
+**Mode implications:**
+- `--dry`: read-heavy, no writes. Usually shorter.
+- `--fix`: may include edits + verification reads. Plan for more turns.
+- `--safe`: if system-file fixes are needed, doctor escalates instead of editing — doesn't cost extra turns.
+- `--unsafe`: same as --fix for sizing; the permission scope doesn't change the work required.
+
+**User context signal:**
+- Specific, narrow question ("is the plist loaded?") → few turns, minimal budget. Don't overprovision; haiku can resolve most yes/no state questions in 2–3 reads.
+- Unclear symptom ("something is weird") → full sweep with fixes, plan for broader coverage.
+- Named subsystem failure ("pe-pipeline ran but no artifact") → focused but deep. Read the specific logs, trace the exact chain. Usually sonnet-worthy.
+- Multiple subsystems implicated or architectural suspicion → sonnet, high effort, enough turns to walk the graph.
+
+**Bias:**
+- If you're unsure whether it's small or medium, err medium. Doctor is usually invoked when something is already weird; underprovisioning wastes both runs.
+- If the question is emphatically trivial (user is just sanity-checking), stay small.
+- The budget should finish the work with some headroom, not exactly match it. Hitting the budget ceiling produces a truncated diagnostic — worse than one that ran a few cents over.
+
+**Hard floors and ceilings** (not targets — guardrails):
+- Minimum: 3 turns, $0.05, haiku. Anything smaller isn't worth spawning a session.
+- Maximum: 60 turns, $3.00, sonnet. Anything bigger is probably the wrong framing — suggest breaking it into multiple invocations in the interpretation field.
 
 # Output
 
@@ -1477,10 +1500,37 @@ def _build_interpreter_prompt() -> str:
 - "Create a job that watches for new PDFs" -> semantic
 - "What ran today and were there any failures?" -> semantic (needs log analysis)
 
-# Complexity hints for semantic commands
-- Trivial (simple query, single status check): haiku, low effort, 3 turns, $0.05 budget
-- Standard (create/modify a single job): sonnet, medium effort, 15 turns, $0.50 budget
-- Complex (multi-stage pipeline, module creation, DAG wiring): sonnet or opus, high effort, 40 turns, $2.00 budget
+# Sizing the semantic execution (for command_type="semantic")
+
+Reason from the specific request, not from tiers. Every invocation has a different shape.
+
+**Cost anchors** (approximate):
+- haiku: $1/M input, $5/M output, fast. Good for status queries, lookups, pure-reasoning tasks with small context.
+- sonnet: $3/M input, $15/M output. Good for anything that requires synthesis, code authoring, multi-file work.
+- opus: $15/M input, $75/M output. Reach for this only when deep reasoning across tangled code or architecture is unavoidable.
+- Tool-chain turn with tool calls + reasoning overhead: ~$0.02 on haiku, ~$0.08 on sonnet, ~$0.40 on opus.
+
+**Sizing dimensions:**
+- Read cost: how many files must the session open? How large are they? Manifest is ~1KB; a single job .md is ~3–6KB; a log can be hundreds of KB.
+- Write cost: how much new code/config will the session produce? 50 lines is small; 500 lines of new job scaffolding is not.
+- Reasoning depth: can the agent answer after one read, or must it synthesize across multiple files? Multi-step reasoning needs sonnet.
+- Verification: does the request include "make sure it works" or "test it"? Add turns for re-reading and validating.
+
+**Model selection heuristics (not rules):**
+- Status query, single lookup, list-and-filter → haiku is usually enough.
+- Create/modify a single job, answer a code question from context → sonnet.
+- Multi-file refactor, DAG wiring, module creation with internal stages, anything requiring careful cross-referencing → sonnet at high effort.
+- Genuinely architectural decisions or tricky debugging with many unknowns → opus, sparingly.
+
+**Turns and budget:**
+- Turns = roughly (reads + writes + verifications) × 1.3 for reasoning overhead.
+- Budget = sum of per-turn cost estimates × 1.3 for headroom. Hitting the budget ceiling truncates output; one that runs a few cents over is fine.
+- A session that lands at 60% of its budget ceiling did it right. 100% is too tight.
+
+**Hard floors and ceilings** (guardrails, not targets):
+- Minimum: 3 turns, $0.05, haiku.
+- Maximum: 60 turns, $3.00, sonnet (or opus if genuinely warranted).
+- Above the ceiling, reconsider the request — suggest breaking into multiple invocations in the interpretation field.
 
 # CRITICAL: Quality of `interpretation` field
 
