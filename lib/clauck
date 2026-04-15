@@ -3,6 +3,7 @@
 
 Usage:
     clauck list                          Show all jobs with status
+    clauck next                          Show when each job will next fire
     clauck status                        System overview
     clauck fire <name>                   Ad-hoc trigger a job
     clauck pause <name>                  Disable a job
@@ -35,7 +36,7 @@ import json
 import os
 import subprocess
 import sys
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 HOME = Path(os.environ.get("HOME", str(Path.home())))
@@ -52,7 +53,7 @@ MARKETPLACE_DIR = HOME / ".claude" / "skills" / "clauck" / "marketplace"
 KNOWN_COMMANDS = {
     "list", "status", "fire", "pause", "resume", "edit", "logs",
     "marketplace", "install", "update", "config", "version", "doctor", "peek", "work",
-    "add", "inspect", "remove", "delete", "rm",
+    "add", "inspect", "remove", "delete", "rm", "next",
     "-h", "--help", "help",
 }
 
@@ -138,7 +139,139 @@ def job_state(name: str) -> dict:
     return info
 
 
+# ── cron helpers (mirrors scheduler.py; duplicated to keep clauck standalone) ──
+
+def _cron_part_matches(part: str, value: int, lo: int, hi: int, aliases=None) -> bool:
+    step = 1
+    if "/" in part:
+        base, _, step_s = part.partition("/")
+        step = int(step_s)
+    else:
+        base = part
+    if base in ("*", ""):
+        start, end = lo, hi
+    elif "-" in base:
+        a, _, b = base.partition("-")
+        start, end = int(a), int(b)
+    else:
+        n = int(base)
+        if aliases and n in aliases:
+            n = aliases[n]
+        if step > 1:
+            return value == n
+        return value == n
+    return lo <= value <= hi and start <= value <= end and ((value - start) % step == 0)
+
+
+def _cron_field_matches(field_expr: str, value: int, lo: int, hi: int, aliases=None) -> bool:
+    return any(_cron_part_matches(p, value, lo, hi, aliases) for p in field_expr.split(","))
+
+
+def _cron_matches(expr: str, dt: datetime) -> bool:
+    """Return True if *expr* matches *dt* (minute precision, 5-field cron)."""
+    fields = expr.strip().split()
+    if len(fields) != 5:
+        raise ValueError(f"cron must have 5 fields: {expr!r}")
+    minute, hour, dom, month, dow = fields
+    wd = dt.isoweekday() % 7  # Mon=1..Sun=7 → Sun=0..Sat=6 (cron convention)
+    return (
+        _cron_field_matches(minute, dt.minute, 0, 59)
+        and _cron_field_matches(hour, dt.hour, 0, 23)
+        and _cron_field_matches(dom, dt.day, 1, 31)
+        and _cron_field_matches(month, dt.month, 1, 12)
+        and _cron_field_matches(dow, wd, 0, 6, {7: 0})
+    )
+
+
+def _cron_next(expr: str, from_dt: datetime) -> "datetime | None":
+    """First minute strictly after *from_dt* that matches *expr*.
+
+    Scans minute-by-minute up to 8 days out.  Returns None if the
+    expression never matches in that window (broken / extremely sparse cron).
+    """
+    candidate = from_dt.replace(second=0, microsecond=0) + timedelta(minutes=1)
+    limit = from_dt + timedelta(days=8)
+    while candidate <= limit:
+        try:
+            if _cron_matches(expr, candidate):
+                return candidate
+        except ValueError:
+            return None
+        candidate += timedelta(minutes=1)
+    return None
+
+
+def _fmt_next_fire(next_dt: datetime, now: datetime) -> str:
+    """Human-readable relative + absolute fire time string."""
+    delta = next_dt - now
+    total_minutes = max(1, int(delta.total_seconds() / 60))
+
+    if total_minutes < 60:
+        rel = f"in {total_minutes}m"
+    elif total_minutes < 24 * 60:
+        hours = total_minutes // 60
+        mins = total_minutes % 60
+        rel = f"in {hours}h {mins}m" if mins else f"in {hours}h"
+    else:
+        days = total_minutes // (24 * 60)
+        hours = (total_minutes % (24 * 60)) // 60
+        rel = f"in {days}d {hours}h" if hours else f"in {days}d"
+
+    if next_dt.date() == now.date():
+        abs_str = f"today {next_dt.strftime('%H:%M')}"
+    elif next_dt.date() == (now + timedelta(days=1)).date():
+        abs_str = f"tomorrow {next_dt.strftime('%H:%M')}"
+    else:
+        abs_str = next_dt.strftime("%a %H:%M")
+
+    return f"{rel:<12}({abs_str})"
+
+
 # ── commands ─────────────────────────────────────────────────────────────
+
+def cmd_next() -> None:
+    """Show when each job will next fire."""
+    m = load_manifest()
+    jobs = m.get("jobs", [])
+    if not jobs:
+        print("No jobs registered.")
+        return
+
+    now = datetime.now()
+    name_w = max((len(j["name"]) for j in jobs), default=10) + 2
+
+    for j in jobs:
+        name = j["name"]
+        cron = j.get("cron", "").strip()
+        triggers = j.get("external_triggers", [])
+        disabled = j.get("disabled", False)
+        state = job_state(name)
+
+        paused = disabled or bool(state.get("auto_disabled"))
+        if paused:
+            ad = state.get("auto_disabled")
+            if isinstance(ad, dict):
+                reason = ad.get("reason", "auto-disabled")
+                status = f"[{reason}]"
+            elif ad:
+                status = "[auto-disabled]"
+            else:
+                status = "[paused]"
+        elif cron:
+            nf = _cron_next(cron, now)
+            status = _fmt_next_fire(nf, now) if nf else "(no match in 8d)"
+        elif triggers:
+            types = sorted({
+                t.get("type", "?") if isinstance(t, dict) else "?"
+                for t in triggers
+            })
+            status = f"event-driven  ({', '.join(types)})"
+        else:
+            status = "ad-hoc only"
+
+        cron_display = cron[:20] if cron else "—"
+        print(f"  {name:<{name_w}}  {cron_display:<22}  {status}")
+
 
 def cmd_list() -> None:
     m = load_manifest()
@@ -1298,6 +1431,8 @@ def main() -> None:
 
     if cmd == "list":
         cmd_list()
+    elif cmd == "next":
+        cmd_next()
     elif cmd == "status":
         cmd_status()
     elif cmd == "fire" and rest:
