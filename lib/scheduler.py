@@ -277,6 +277,8 @@ def discover_jobs() -> list[dict]:
                 # --- pipeline ---
                 "producers": list(fm.get("producers", []) or []),
                 "consumers": list(fm.get("consumers", []) or []),
+                # --- inputs ---
+                "inputs": list(fm.get("inputs", []) or []),
                 # --- module ---
                 "module_root": "",
             }
@@ -326,6 +328,7 @@ def discover_jobs() -> list[dict]:
                 "tags": list(fm.get("tags", []) or []),
                 "producers": list(fm.get("producers", []) or []),
                 "consumers": list(fm.get("consumers", []) or []),
+                "inputs": list(fm.get("inputs", []) or []),
                 "module_root": str(job_dir),  # extra field for modules
             }
         )
@@ -644,6 +647,7 @@ def write_manifest(jobs: list[dict]) -> None:
                 "external_triggers": j.get("external_triggers", []),
                 "producers": j.get("producers", []),
                 "consumers": j.get("consumers", []),
+                "inputs": j.get("inputs", []),
                 "trigger_command": f'{JOBS_DIR / "trigger-job.sh"} {j["name"]}',
                 "prompt_path": j["path"],
                 "module_root": j.get("module_root", ""),

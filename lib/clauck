@@ -14,6 +14,7 @@ Usage:
     clauck update [--apply]              Check for / apply updates
     clauck config [set <key> <value>]    Show or edit config
     clauck add <path> [--name N] [--when "schedule"]  Import a file as a job
+    clauck inspect <name>                 Inspect a job's config and DAG
     clauck doctor [-i|--interactive]     Diagnose system health
     clauck peek                          Live-tail all job logs (Ctrl+C to stop)
     clauck version                       Show version
@@ -50,7 +51,7 @@ MARKETPLACE_DIR = HOME / ".claude" / "skills" / "clauck" / "marketplace"
 KNOWN_COMMANDS = {
     "list", "status", "fire", "pause", "resume", "edit", "logs",
     "marketplace", "install", "update", "config", "version", "doctor", "peek", "work",
-    "add",
+    "add", "inspect",
     "-h", "--help", "help",
 }
 
@@ -197,10 +198,11 @@ def cmd_status() -> None:
             pass
 
 
-def cmd_fire(name: str) -> None:
+def cmd_fire(name: str, extra_args: list[str] | None = None) -> None:
     if not TRIGGER_SCRIPT.exists():
         die("trigger-job.sh not found")
-    result = subprocess.run([str(TRIGGER_SCRIPT), name], capture_output=True, text=True)
+    cmd = [str(TRIGGER_SCRIPT), name] + (extra_args or [])
+    result = subprocess.run(cmd, capture_output=True, text=True)
     print(result.stdout.strip())
     if result.returncode != 0:
         print(result.stderr.strip(), file=sys.stderr)
@@ -534,6 +536,167 @@ def cmd_add(path: str, name: str = "", when: str = "") -> None:
     print(f"  test: clauck fire {job_name}")
 
 
+def cmd_inspect(name: str) -> None:
+    """Inspect a job's full configuration and producer DAG."""
+    m = load_manifest()
+    jobs = m.get("jobs", [])
+    job = None
+    for j in jobs:
+        if j["name"] == name:
+            job = j
+            break
+    if not job:
+        die(f"job not found in manifest: {name}")
+
+    # --- Print full config ---
+    print(f"\n  Job: {job['name']}")
+    if job.get("description"):
+        print(f"  Description: {job['description']}")
+    print(f"  Cron: {job.get('cron') or '(none)'}")
+    if job.get("module_root"):
+        print(f"  Module root: {job['module_root']}")
+    print(f"  Prompt: {job.get('prompt_path', '')}")
+    print(f"  Disabled: {job.get('disabled', False)}")
+
+    # Show tags
+    tags = job.get("tags", [])
+    if tags:
+        print(f"  Tags: {', '.join(str(t) for t in tags)}")
+
+    # Show triggers
+    triggers = job.get("external_triggers", [])
+    if triggers:
+        print(f"  External triggers:")
+        for t in triggers:
+            if isinstance(t, dict):
+                parts = [f"{k}={v}" for k, v in t.items()]
+                print(f"    - {', '.join(parts)}")
+            else:
+                print(f"    - {t}")
+
+    hooks = job.get("semantic_hooks", [])
+    if hooks:
+        print(f"  Semantic hooks:")
+        for h in hooks:
+            print(f"    - {h}")
+
+    # Show inputs
+    inputs = job.get("inputs", [])
+    if inputs:
+        print(f"  Inputs:")
+        for inp in inputs:
+            if isinstance(inp, dict):
+                iname = inp.get("name", "?")
+                idefault = inp.get("default", "")
+                idesc = inp.get("description", "")
+                line = f"    - {iname}"
+                if idefault:
+                    line += f"  (default: {idefault})"
+                if idesc:
+                    line += f"  — {idesc}"
+                print(line)
+            else:
+                print(f"    - {inp}")
+
+    # Show producers/consumers
+    producers = job.get("producers", [])
+    consumers = job.get("consumers", [])
+    if producers:
+        print(f"  Producers: {', '.join(p['name'] if isinstance(p, dict) else str(p) for p in producers)}")
+    if consumers:
+        print(f"  Consumers: {', '.join(str(c) for c in consumers)}")
+
+    # --- DAG tree visualization ---
+    if producers:
+        # Build a lookup from name -> job dict
+        job_by_name = {j["name"]: j for j in jobs}
+
+        def build_tree(jname: str, depth: int, visited: set) -> list[tuple[str, int, bool]]:
+            """Returns list of (display_name, depth, is_module) tuples."""
+            nodes: list[tuple[str, int, bool]] = []
+            jobj = job_by_name.get(jname)
+            if not jobj:
+                return nodes
+            prods = jobj.get("producers", [])
+            for p in prods:
+                pname = p["name"] if isinstance(p, dict) else str(p)
+                pobj = job_by_name.get(pname)
+                is_mod = bool(pobj.get("module_root", "")) if pobj else False
+                nodes.append((pname, depth, is_mod))
+                if pname not in visited and depth < 10:
+                    visited.add(pname)
+                    nodes.extend(build_tree(pname, depth + 1, visited))
+            return nodes
+
+        tree = build_tree(name, 0, {name})
+
+        if tree:
+            print(f"\n  Producer DAG:")
+            print(f"  {name}")
+
+            # Group by parent for proper tree drawing
+            # We need to know which items are last at each depth
+            # Simpler approach: walk linearly, tracking depth transitions
+            for i, (node_name, depth, is_mod) in enumerate(tree):
+                # Determine if this is the last sibling at this depth
+                is_last = True
+                for future_name, future_depth, _ in tree[i + 1:]:
+                    if future_depth == depth:
+                        is_last = False
+                        break
+                    if future_depth < depth:
+                        break
+
+                # Build prefix
+                prefix = ""
+                for d in range(depth):
+                    # Check if there's still a continuing branch at this depth
+                    has_continuation = False
+                    for fn, fd, _ in tree[i + 1:]:
+                        if fd == d:
+                            has_continuation = True
+                            break
+                        if fd < d:
+                            break
+                    prefix += "│  " if has_continuation else "   "
+
+                connector = "└─ " if is_last else "├─ "
+                suffix = " (module)" if is_mod else ""
+                print(f"  {prefix}{connector}{node_name}{suffix}")
+
+            # Show internal files for modules in the tree
+            all_tree_names = {node_name for node_name, _, _ in tree}
+            all_tree_names.add(name)
+            for tname in sorted(all_tree_names):
+                tobj = job_by_name.get(tname)
+                if tobj and tobj.get("module_root"):
+                    mod_root = Path(tobj["module_root"])
+                    if mod_root.is_dir():
+                        internal_mds = sorted(
+                            p for p in mod_root.glob("*.md")
+                            if p.name != "JOB.md" and not p.name.startswith(".")
+                        )
+                        if internal_mds:
+                            print(f"\n  Module internals: {tname} ({mod_root})")
+                            for md in internal_mds:
+                                print(f"    [internal] {md.stem}")
+
+    # --- Module internals for the inspected job itself ---
+    if job.get("module_root"):
+        mod_root = Path(job["module_root"])
+        if mod_root.is_dir():
+            internal_mds = sorted(
+                p for p in mod_root.glob("*.md")
+                if p.name != "JOB.md" and not p.name.startswith(".")
+            )
+            if internal_mds:
+                print(f"\n  Module internals ({mod_root}):")
+                for md in internal_mds:
+                    print(f"    [internal] {md.stem}")
+
+    print()
+
+
 def cmd_doctor(interactive: bool = False, context: str = "") -> None:
     """Spawn a clauck-work diagnostic session."""
     claude_bin = _find_claude()
@@ -679,7 +842,7 @@ def main() -> None:
     elif cmd == "status":
         cmd_status()
     elif cmd == "fire" and rest:
-        cmd_fire(rest[0])
+        cmd_fire(rest[0], extra_args=rest[1:])
     elif cmd == "pause" and rest:
         cmd_pause(rest[0])
     elif cmd == "resume" and rest:
@@ -726,6 +889,8 @@ def main() -> None:
         if not add_path:
             die("usage: clauck add <path> [--name NAME] [--when \"schedule\"]")
         cmd_add(add_path, name=add_name, when=add_when)
+    elif cmd == "inspect" and rest:
+        cmd_inspect(rest[0])
     elif cmd == "doctor":
         interactive = "-i" in rest or "--interactive" in rest
         # Filter out flags, join remaining as context

@@ -194,7 +194,68 @@ RUNTIME_CONTEXT="# Runtime Context (this invocation)
 - **Per-job state directory:** ${JOBS_DIR}/.state/
 
 Spend proportional to value. Budget is a cap, not a target. If there is nothing meaningful to do, exit cleanly with a brief note — a no-op is a legitimate outcome for a scheduled invocation.
-These limits are enforced — exceeding max_budget_usd or max_turns terminates the session immediately."
+These limits are enforced — exceeding max_budget_usd or max_turns terminates the session immediately.
+
+## Tilde expansion (critical)
+
+When you encounter \`~\` in any file path — in this Runtime Context, in Custom inputs, or anywhere else — expand it to the absolute home path BEFORE using it with any tool. The Read tool and other file operations do NOT expand tilde automatically.
+
+- \`~\` or \`~/\` → \`${HOME}/\`
+- Example: \`~/Downloads/file.pdf\` → \`${HOME}/Downloads/file.pdf\`
+
+Tilde paths are a known failure mode; the expansion is your responsibility every time."
+
+# --- Apply input defaults from frontmatter ---
+# Read the job's `inputs:` declarations and set CLAUCK_INPUT_<NAME> for any
+# input whose env var is not already set. This ensures every declared input
+# has at least its default value available for the injection block below.
+eval "$(/usr/bin/python3 -c "
+import re, os, sys
+try:
+    text = open('$PROMPT_FILE').read()
+    m = re.match(r'\A---\s*\n(.*?)\n---\s*\n?', text, re.DOTALL)
+    if not m:
+        sys.exit(0)
+    fm_block = m.group(1)
+    # Minimal parse: find 'inputs:' key, then collect list items
+    lines = fm_block.splitlines()
+    in_inputs = False
+    for line in lines:
+        stripped = line.strip()
+        if stripped.startswith('inputs:'):
+            in_inputs = True
+            continue
+        if in_inputs:
+            if stripped.startswith('- '):
+                item = stripped[2:].strip()
+                # Parse flow-style object: {name: X, default: Y, ...}
+                if item.startswith('{') and item.endswith('}'):
+                    inner = item[1:-1]
+                    fields = {}
+                    for part in inner.split(','):
+                        part = part.strip()
+                        if ':' in part:
+                            k, _, v = part.partition(':')
+                            k = k.strip()
+                            v = v.strip().strip('\"').strip(\"'\")
+                            fields[k] = v
+                    iname = fields.get('name', '')
+                    idefault = fields.get('default', '')
+                    if iname:
+                        env_key = 'CLAUCK_INPUT_' + iname
+                        if env_key not in os.environ:
+                            # Expand env vars in default value
+                            expanded = os.path.expandvars(idefault)
+                            # Shell-escape the value
+                            safe = expanded.replace(\"'\", \"'\\\\''\" )
+                            print(f\"export {env_key}='{safe}'\")
+            elif not stripped.startswith('#'):
+                # Hit a non-list-item, non-comment line — end of inputs block
+                if stripped and not stripped.startswith('-'):
+                    break
+except Exception:
+    pass
+" 2>/dev/null)"
 
 # Append any CLAUCK_INPUT_* env vars as custom input to the runtime context
 CUSTOM_INPUTS=""

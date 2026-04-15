@@ -21,8 +21,6 @@ semantic_hooks:
   - Investigating why a specific scheduled job that needs MCP tools is failing
 ---
 
-**Important:** Replace any `~/` paths below with the absolute path using the `User home` value from your Runtime Context (e.g., `/Users/<username>/Downloads` not `~/Downloads`). The Read tool does not expand tilde.
-
 <!--
 CUSTOMIZE BEFORE INSTALLING:
 Pick ONE destination for the daily post and edit the prompt below accordingly.

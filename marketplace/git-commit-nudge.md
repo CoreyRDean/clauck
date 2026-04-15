@@ -21,8 +21,6 @@ semantic_hooks:
   - Need a reminder about stale git working directories
 ---
 
-**Important:** Replace any `~/` paths below with the absolute path using the `User home` value from your Runtime Context (e.g., `/Users/<username>/Downloads` not `~/Downloads`). The Read tool does not expand tilde.
-
 <!--
 CUSTOMIZE BEFORE INSTALLING:
 1. Change REPOS_ROOT below to the parent directory containing your git repos.

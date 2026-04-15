@@ -17,7 +17,7 @@ Workflow automation powered by AI agents. Schedule tasks, chain pipelines, react
 
 ## Critical: file paths in job prompts
 
-**The Read tool does NOT expand `~` (tilde).** ALWAYS use fully-resolved absolute paths in job prompts. The runtime context provides `User home:` — use it. Write `/Users/<username>/Documents/file.md`, never `~/Documents/file.md`. This is the #1 cause of job failures.
+**Tilde expansion is handled by the runtime context.** Every job receives a Tilde expansion directive telling the LLM to replace `~` with the absolute home path before using it. Job prompts can freely use `~/path` notation — the LLM will expand it at runtime. Authors don't need to write absolute paths.
 
 ## Critical: timezone
 
