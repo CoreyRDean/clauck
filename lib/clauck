@@ -896,15 +896,39 @@ def _build_interpreter_prompt() -> str:
 - Standard (create/modify a single job): sonnet, medium effort, 15 turns, $0.50 budget
 - Complex (multi-stage pipeline, module creation, DAG wiring): sonnet or opus, high effort, 40 turns, $2.00 budget
 
+# CRITICAL: Quality of `interpretation` field
+
+The `interpretation` field is the value you add. It is shown to the user as feedback proving you understood their intent. It MUST:
+
+1. **Be a distillation, not a copy.** Never echo the user's words verbatim. Rewrite in your own words capturing the intent.
+2. **Read like a CLI directive.** Imperative mood, 6–14 words, no filler, no pronouns ("Create hourly job...", not "I will create...").
+3. **Name the concrete artifact.** When creating a job, include the inferred job name. When firing, include the resolved args.
+4. **Expose inferred details.** Name the schedule in human terms ("every hour on the hour"), the model tier, and the job type (standard vs module) when relevant.
+5. **Never be generic.** "Execute semantic command" or "Run user request" are failures. Be specific about the what and where.
+
+Bad interpretation: "execute: every hour invoke a claude code session to mine..."
+Good interpretation: "Create hourly module 'intent-miner' (sonnet, medium budget) that opens a draft PR"
+
+Bad interpretation: "I want to see my jobs"
+Good interpretation: "List all registered jobs with schedules and status"
+
+# CRITICAL: Quality of `enhanced_prompt` field (semantic only)
+
+The `enhanced_prompt` is what the execution agent receives. It must:
+1. **Preserve all intent** the user expressed.
+2. **Add prescriptive structure** the user didn't say but that the execution agent needs (file path, frontmatter fields, module vs standard choice, cron expression).
+3. **Remove conversational filler** and reformulate as a task brief.
+4. **Scale detail with complexity.** A trivial request stays terse. A complex pipeline gets a structured breakdown.
+
 # Output format
 
 Return ONLY valid JSON, no markdown fencing, no explanation:
 
 For deterministic:
-{{"command_type": "deterministic", "interpretation": "<one-line CLI-style description>", "deterministic_cmd": "clauck fire jobA SOURCE_PATH=/x"}}
+{{"command_type": "deterministic", "interpretation": "<distilled CLI directive>", "deterministic_cmd": "clauck fire jobA SOURCE_PATH=/x"}}
 
 For semantic:
-{{"command_type": "semantic", "interpretation": "<one-line CLI-style description>", "enhanced_prompt": "<prescriptive reformulation of the user's request for the execution agent>", "exec_model": "haiku"|"sonnet"|"opus", "exec_effort": "low"|"medium"|"high", "exec_max_turns": <int>, "exec_max_budget_usd": <float>}}"""
+{{"command_type": "semantic", "interpretation": "<distilled CLI directive>", "enhanced_prompt": "<prescriptive task brief>", "exec_model": "haiku"|"sonnet"|"opus", "exec_effort": "low"|"medium"|"high", "exec_max_turns": <int>, "exec_max_budget_usd": <float>}}"""
 
 
 SEMANTIC_EXEC_SYSTEM_PROMPT = """You are the clauck CLI executing a user's natural-language command.
@@ -976,38 +1000,84 @@ def cmd_semantic(text: str) -> None:
     if not claude_bin:
         die("claude CLI not found — semantic commands require claude on PATH")
 
+    # ── Spinner (wraps both stages) ──────────────────────────────────────
+    spinner_running = [True]
+    spinner_label = ["interpreting"]
+    start_time = _time.time()
+
+    def spinner():
+        chars = "\u280b\u2819\u2839\u2838\u283c\u2834\u2826\u2827\u2807\u280f"
+        i = 0
+        while spinner_running[0]:
+            elapsed = int(_time.time() - start_time)
+            label = spinner_label[0]
+            sys.stderr.write(f"\r  {chars[i % len(chars)]} {label}... ({elapsed}s)")
+            sys.stderr.flush()
+            i += 1
+            _time.sleep(0.1)
+        sys.stderr.write("\r" + " " * 50 + "\r")
+        sys.stderr.flush()
+
+    spin_thread = threading.Thread(target=spinner, daemon=True)
+    spin_thread.start()
+
     # ── Stage 1: Interpreter ────────────────────────────────────────────
     interpreter_prompt = _build_interpreter_prompt()
     user_prompt = f"The user ran: `clauck {text}`"
 
-    result_s1 = subprocess.run(
-        [claude_bin, "-p", user_prompt,
-         "--append-system-prompt", interpreter_prompt,
-         "--model", "haiku",
-         "--max-turns", "3",
-         "--max-budget-usd", "0.05",
-         "--output-format", "text",
-         "--setting-sources", ""],
-        capture_output=True, text=True,
-    )
+    # Use strict-mcp-config with empty config so the interpreter runs bare
+    # (no MCP surface cache-creation cost). Without this, $0.05 budget is
+    # consumed immediately by MCP tool prompt.
+    empty_mcp = STATE_DIR / ".empty-mcp-config.json"
+    if not empty_mcp.exists():
+        STATE_DIR.mkdir(parents=True, exist_ok=True)
+        empty_mcp.write_text('{"mcpServers":{}}')
 
-    # Parse the interpreter JSON
+    try:
+        result_s1 = subprocess.run(
+            [claude_bin, "-p", user_prompt,
+             "--append-system-prompt", interpreter_prompt,
+             "--model", "haiku",
+             "--max-turns", "3",
+             "--max-budget-usd", "0.10",
+             "--output-format", "json",
+             "--setting-sources", "",
+             "--strict-mcp-config",
+             "--mcp-config", str(empty_mcp)],
+            capture_output=True, text=True,
+        )
+    except Exception:
+        spinner_running[0] = False
+        spin_thread.join(timeout=0.5)
+        raise
+
+    # Parse the interpreter envelope (claude -p --output-format json gives
+    # {"result": "...", "is_error": ..., ...}); the inner result is our JSON.
     routing = {}
+    interpreter_error = ""
     if result_s1.returncode == 0 and result_s1.stdout.strip():
-        raw = result_s1.stdout.strip()
-        # Extract JSON (may be wrapped in markdown fences)
-        json_match = _re.search(r'\{[\s\S]*\}', raw)
-        if json_match:
-            try:
+        try:
+            envelope = json.loads(result_s1.stdout)
+            inner = envelope.get("result", "").strip()
+            # Find the JSON object in the inner text
+            json_match = _re.search(r'\{[\s\S]*\}', inner)
+            if json_match:
                 routing = json.loads(json_match.group(0))
-            except json.JSONDecodeError:
-                pass
+            else:
+                interpreter_error = f"no JSON found in interpreter output: {inner[:200]}"
+        except (json.JSONDecodeError, ValueError) as e:
+            interpreter_error = f"interpreter JSON parse failed: {e}"
+    elif result_s1.returncode != 0:
+        interpreter_error = f"interpreter exited {result_s1.returncode}: {result_s1.stderr[:200]}"
 
     if not routing or "command_type" not in routing:
-        # Interpreter failed — fall back to full semantic execution
+        # Interpreter failed — log the reason, fall back with honest marker
+        if interpreter_error:
+            sys.stderr.write(f"\r  ! interpreter fallback: {interpreter_error[:120]}\n")
+            sys.stderr.flush()
         routing = {
             "command_type": "semantic",
-            "interpretation": f"execute: {text}",
+            "interpretation": f"(interpreter failed — raw request passed through)",
             "enhanced_prompt": text,
             "exec_model": "sonnet",
             "exec_effort": "medium",
@@ -1020,7 +1090,9 @@ def cmd_semantic(text: str) -> None:
     # ── Stage 2: Dispatch ───────────────────────────────────────────────
 
     if routing["command_type"] == "deterministic":
-        # Print interpretation, then run the deterministic command
+        # Stop spinner, print interpretation, then run the deterministic command
+        spinner_running[0] = False
+        spin_thread.join(timeout=0.5)
         print(f"  \u2192 {interpretation}")
         det_cmd = routing.get("deterministic_cmd", "").strip()
         if not det_cmd:
@@ -1046,6 +1118,9 @@ def cmd_semantic(text: str) -> None:
         return
 
     # semantic path — run execution pass with interpreter-chosen parameters
+    # Temporarily pause spinner to print interpretation, then resume with new label
+    spinner_running[0] = False
+    spin_thread.join(timeout=0.5)
     print(f"  \u2192 {interpretation}")
     print(f"  {'─' * 60}")
 
@@ -1062,22 +1137,10 @@ def cmd_semantic(text: str) -> None:
     system_prompt = system_prompt.replace("{CONFIG_FILE}", str(CONFIG_FILE))
     system_prompt = system_prompt.replace("{TRIGGER_SCRIPT}", str(TRIGGER_SCRIPT))
 
-    # Spinner state
-    spinner_running = [True]
+    # Restart spinner for stage 2 with updated label
+    spinner_running[0] = True
+    spinner_label[0] = f"executing ({exec_model}, {exec_effort} effort)"
     start_time = _time.time()
-
-    def spinner():
-        chars = "\u280b\u2819\u2839\u2838\u283c\u2834\u2826\u2827\u2807\u280f"
-        i = 0
-        while spinner_running[0]:
-            elapsed = int(_time.time() - start_time)
-            sys.stderr.write(f"\r  {chars[i % len(chars)]} working... ({elapsed}s)")
-            sys.stderr.flush()
-            i += 1
-            _time.sleep(0.1)
-        sys.stderr.write("\r" + " " * 40 + "\r")
-        sys.stderr.flush()
-
     spin_thread = threading.Thread(target=spinner, daemon=True)
     spin_thread.start()
 
