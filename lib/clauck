@@ -8,6 +8,7 @@ Usage:
     clauck pause <name>                  Disable a job
     clauck resume <name>                 Re-enable a paused job
     clauck edit <name>                   Open job prompt in your editor
+    clauck remove <name>                 Delete a job + its state (also: delete, rm)
     clauck logs <name> [--last N]        Show recent logs
     clauck marketplace                    Browse pre-made jobs
     clauck install <marketplace-job>     Install from marketplace
@@ -51,7 +52,7 @@ MARKETPLACE_DIR = HOME / ".claude" / "skills" / "clauck" / "marketplace"
 KNOWN_COMMANDS = {
     "list", "status", "fire", "pause", "resume", "edit", "logs",
     "marketplace", "install", "update", "config", "version", "doctor", "peek", "work",
-    "add", "inspect",
+    "add", "inspect", "remove", "delete", "rm",
     "-h", "--help", "help",
 }
 
@@ -282,6 +283,65 @@ def cmd_resume(name: str) -> None:
     if rr.exists():
         rr.unlink()
         print(f"  reset runs counter for: {name}")
+
+
+def cmd_remove(name: str) -> None:
+    """Delete a job (standard or module format) + clean up its state.
+
+    Direct filesystem operation — no LLM, no permission prompts.
+    """
+    import shutil as _shutil
+    removed = []
+
+    # Standard format: <name>.md
+    flat = JOBS_DIR / f"{name}.md"
+    if flat.exists():
+        flat.unlink()
+        removed.append(str(flat))
+
+    # Module format: <name>/ directory with JOB.md
+    module = JOBS_DIR / name
+    if module.is_dir() and (module / "JOB.md").exists():
+        _shutil.rmtree(module)
+        removed.append(f"{module}/ (module)")
+
+    # Clean up state: last-run, session-id, runs-remaining, auto-disabled,
+    # producer-outputs, lock.d, trigger state files
+    state_patterns = [
+        f"{name}.last-run",
+        f"{name}.last-start",
+        f"{name}.session-id",
+        f"{name}.runs-remaining",
+        f"{name}.auto-disabled",
+    ]
+    for pattern in state_patterns:
+        f = STATE_DIR / pattern
+        if f.exists():
+            f.unlink()
+    # Glob patterns: lock dirs, producer-outputs, trigger state
+    import glob as _glob
+    for pat in [
+        f"{STATE_DIR}/{name}.lock.d",
+        f"{STATE_DIR}/{name}.lock.d/*",
+        f"{STATE_DIR}/{name}.producer-outputs-*.json",
+        f"{STATE_DIR}/{name}.trigger-*.json",
+        f"{STATE_DIR}/{name}.runs-remaining",
+    ]:
+        for match in _glob.glob(pat):
+            p = Path(match)
+            if p.is_dir():
+                _shutil.rmtree(p)
+            elif p.exists():
+                p.unlink()
+
+    # Remove logs? User might want them for audit. Leave them — they rotate naturally.
+
+    if not removed:
+        die(f"no job found: {name} (checked {flat} and {module}/JOB.md)")
+
+    for r in removed:
+        print(f"  removed: {r}")
+    print(f"  (logs preserved at {JOBS_DIR}/{name}-*.log)")
 
 
 def cmd_edit(name: str) -> None:
@@ -842,7 +902,8 @@ def _build_interpreter_prompt() -> str:
     """Build the stage-1 interpreter system prompt with live manifest data."""
     subcommands = (
         "list, status, fire, pause, resume, edit, logs, marketplace, install, "
-        "update, config, doctor, peek, version, add, inspect, work"
+        "update, config, doctor, peek, version, add, inspect, work, "
+        "remove (aliases: delete, rm)"
     )
 
     # Read manifest for job descriptions + inputs
@@ -881,6 +942,7 @@ def _build_interpreter_prompt() -> str:
 - "show me jobA's last run" / "logs for jobA" -> deterministic (clauck logs jobA)
 - "Pause jobA" / "disable jobA" -> deterministic (clauck pause jobA)
 - "Resume jobA" / "enable jobA" -> deterministic (clauck resume jobA)
+- "Delete jobA" / "remove jobA" / "rm jobA" -> deterministic (clauck remove jobA). Direct filesystem op — always prefer this over Write/Delete via the execution agent.
 - "What jobs are running" / "list jobs" -> deterministic (clauck list)
 - "System status" / "how is clauck doing" -> deterministic (clauck status)
 - "Fire jobA with the source at ~/file.md" -> deterministic; convert to KEY=VALUE args using the job's declared inputs
@@ -1034,12 +1096,15 @@ def cmd_semantic(text: str) -> None:
         empty_mcp.write_text('{"mcpServers":{}}')
 
     try:
+        # Use Sonnet for reliability — Haiku was generating explanatory prose
+        # instead of strict JSON on edge cases. Cost increase is marginal
+        # (~$0.03-0.05 vs $0.01) and the reliability is worth it.
         result_s1 = subprocess.run(
             [claude_bin, "-p", user_prompt,
              "--append-system-prompt", interpreter_prompt,
-             "--model", "haiku",
+             "--model", "sonnet",
              "--max-turns", "3",
-             "--max-budget-usd", "0.10",
+             "--max-budget-usd", "0.20",
              "--output-format", "json",
              "--setting-sources", "",
              "--strict-mcp-config",
@@ -1208,6 +1273,8 @@ def main() -> None:
         cmd_resume(rest[0])
     elif cmd == "edit" and rest:
         cmd_edit(rest[0])
+    elif cmd in ("remove", "delete", "rm") and rest:
+        cmd_remove(rest[0])
     elif cmd == "logs" and rest:
         last = 5
         if "--last" in rest:
