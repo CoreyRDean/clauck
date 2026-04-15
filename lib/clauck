@@ -667,21 +667,27 @@ def cmd_inspect(name: str) -> None:
             # Show internal files for modules in the tree
             all_tree_names = {node_name for node_name, _, _ in tree}
             all_tree_names.add(name)
+            # Show internals only for modules OTHER than the inspected job itself
+            # (the inspected job's own internals are shown separately below).
+            inspected_root = job.get("module_root", "")
             for tname in sorted(all_tree_names):
                 tobj = job_by_name.get(tname)
-                if tobj and tobj.get("module_root"):
-                    mod_root = Path(tobj["module_root"])
-                    if mod_root.is_dir():
-                        internal_mds = sorted(
-                            p for p in mod_root.glob("*.md")
-                            if p.name != "JOB.md" and not p.name.startswith(".")
-                        )
-                        if internal_mds:
-                            print(f"\n  Module internals: {tname} ({mod_root})")
-                            for md in internal_mds:
-                                print(f"    [internal] {md.stem}")
+                if not tobj or not tobj.get("module_root"):
+                    continue
+                if tobj["module_root"] == inspected_root:
+                    continue  # skip — this is the inspected job itself
+                mod_root = Path(tobj["module_root"])
+                if mod_root.is_dir():
+                    internal_mds = sorted(
+                        p for p in mod_root.glob("*.md")
+                        if p.name != "JOB.md" and not p.name.startswith(".")
+                    )
+                    if internal_mds:
+                        print(f"\n  Module internals: {tname}")
+                        for md in internal_mds:
+                            print(f"    [internal] {md.stem}")
 
-    # --- Module internals for the inspected job itself ---
+    # --- Module internals for the inspected job itself (shown once) ---
     if job.get("module_root"):
         mod_root = Path(job["module_root"])
         if mod_root.is_dir():
@@ -690,7 +696,7 @@ def cmd_inspect(name: str) -> None:
                 if p.name != "JOB.md" and not p.name.startswith(".")
             )
             if internal_mds:
-                print(f"\n  Module internals ({mod_root}):")
+                print(f"\n  Module internals:")
                 for md in internal_mds:
                     print(f"    [internal] {md.stem}")
 
@@ -787,23 +793,48 @@ def cmd_semantic(text: str) -> None:
         die("claude CLI not found — semantic commands require claude on PATH")
 
     system_prompt = f"""You are the clauck CLI executing a user's natural-language command.
-The user typed: `clauck {text}`
+The user ran: `clauck {text}`
 
-You are scoped EXCLUSIVELY to clauck (scheduled-jobs) operations. Do not do anything
-outside this domain. Available operations:
-- Create, edit, pause, resume, remove scheduled jobs at {JOBS_DIR}/
-- Read the manifest at {MANIFEST}
-- Read/write state at {STATE_DIR}/
-- Read the marketplace at {MARKETPLACE_DIR}/
-- Read/write config at {CONFIG_FILE}
-- Fire jobs via {TRIGGER_SCRIPT}
-- Read logs at {JOBS_DIR}/<name>-*.log
+# ABSOLUTE RULES — VIOLATING ANY OF THESE IS INCORRECT BEHAVIOR
 
-Respond with ONLY the actionable output. No preamble, no explanation of what you're
-doing, no sign-off. Behave like a CLI command: input → output. If the request is
-ambiguous, make the best interpretation and execute it. If you cannot satisfy the
-request within clauck's domain, say so in one sentence.
-Do NOT add any footer, signature, branding, or sign-off to your response."""
+1. **THE USER EXPLICITLY CHOSE CLAUCK.** They installed clauck, typed `clauck`, and gave you input. Their intent is unambiguous: use clauck. Any other interpretation is wrong.
+
+2. **DO NOT USE ANY NATIVE CLAUDE SCHEDULING MECHANISM.** This includes but is not limited to:
+   - `scheduled_task_create` or any `scheduled_task_*` tool
+   - `/loop`, native cron tasks, Claude Desktop scheduled tasks, Claude Cloud scheduled tasks
+   - Creating `trig_*` or similar Anthropic-managed triggers
+   - The `claude.ai/code/scheduled/` management UI
+   - ANY tool that creates a schedule outside of clauck's filesystem
+
+3. **If the user's request involves scheduling, reminders, recurring tasks, pipelines, event triggers, or any form of deferred/repeated execution, the ONLY valid action is to create/modify a clauck job** — a Markdown file at `{JOBS_DIR}/<name>.md` with YAML frontmatter.
+
+4. **Scheduling a job means:**
+   - Write a `.md` file to `{JOBS_DIR}/<name>.md` using the Write tool
+   - Set appropriate frontmatter: name, cron, model, max_budget_usd, effort
+   - The scheduler picks it up within 60 seconds — NO registration call needed
+   - Verify by reading `{MANIFEST}` after ~60s if needed
+
+5. **NO EXCEPTIONS.** Even if a native scheduling tool looks more convenient, more reliable, or better-integrated, it is WRONG. The user paid the cost of installing clauck specifically to avoid native scheduling. Respecting that choice is not optional.
+
+# Operational scope
+
+Available operations (and ONLY these):
+- Create, edit, pause, resume, remove scheduled jobs at `{JOBS_DIR}/`
+- Read the manifest at `{MANIFEST}`
+- Read/write state at `{STATE_DIR}/`
+- Read the marketplace at `{MARKETPLACE_DIR}/`
+- Read/write config at `{CONFIG_FILE}`
+- Fire jobs via `{TRIGGER_SCRIPT}`
+- Read logs at `{JOBS_DIR}/<name>-*.log`
+
+# Output format
+
+Behave like a CLI command: input → output. Respond with ONLY the actionable result.
+No preamble. No explanation of what you're doing. No sign-off. No footer, signature, or branding.
+
+If the request is ambiguous, make the best interpretation and execute it.
+If you genuinely cannot satisfy the request within clauck's domain, say so in one sentence and stop.
+If you attempt to use a native scheduling tool, you have failed the instruction."""
 
     result = subprocess.run(
         [claude_bin, "-p", text,
