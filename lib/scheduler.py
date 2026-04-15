@@ -300,6 +300,11 @@ def discover_jobs() -> list[dict]:
                 "inputs": list(fm.get("inputs", []) or []),
                 # --- module ---
                 "module_root": "",
+                # module_parent names the anchor job of the enclosing module, if any.
+                # Empty for flat jobs and module anchors; set only on module-internal
+                # stages so tick/trigger/manifest can filter them out while the DAG
+                # runner still sees them for producer resolution.
+                "module_parent": "",
             }
         )
 
@@ -349,8 +354,60 @@ def discover_jobs() -> list[dict]:
                 "consumers": list(fm.get("consumers", []) or []),
                 "inputs": list(fm.get("inputs", []) or []),
                 "module_root": str(job_dir),  # extra field for modules
+                # Module anchors are user-facing; module_parent stays empty.
+                "module_parent": "",
             }
         )
+
+        # Discover module-internal stages: <module>/*.md (excluding JOB.md).
+        # These are NOT fired independently by the scheduler — they're only
+        # reachable through the module anchor's producer DAG. But dag-runner.py
+        # needs them in its configs map to resolve producers declared on the
+        # anchor, so we register them here with module_parent set.
+        anchor_name = str(name)
+        for stage_md in sorted(job_dir.glob("*.md")):
+            if stage_md.name == "JOB.md":
+                continue
+            if stage_md.name.startswith("."):
+                continue
+            try:
+                stage_text = stage_md.read_text(encoding="utf-8")
+            except OSError as e:
+                print(f"[scheduler] read error {stage_md}: {e}", file=sys.stderr)
+                continue
+            stage_fm, _stage_body = parse_frontmatter(stage_text)
+            stage_name = stage_fm.get("name") or stage_md.stem
+            jobs.append(
+                {
+                    "name": str(stage_name),
+                    "path": str(stage_md),
+                    "description": str(stage_fm.get("description", "")),
+                    "cron": str(stage_fm.get("cron", "")).strip(),
+                    "max_turns": int(stage_fm.get("max_turns", 50)),
+                    "max_budget_usd": float(stage_fm.get("max_budget_usd", 2.0)),
+                    "cwd": os.path.expanduser(str(stage_fm.get("cwd") or "~")),
+                    "effort": str(stage_fm.get("effort", "high")),
+                    "model": str(stage_fm.get("model", "")).strip(),
+                    "setting_sources": stage_fm.get("setting_sources", None),
+                    "strict_mcp_config": bool(stage_fm.get("strict_mcp_config", False)),
+                    "debounce_seconds": int(stage_fm.get("debounce_seconds", 0) or 0),
+                    "disabled": bool(stage_fm.get("disabled", False)),
+                    "run_once": bool(stage_fm.get("run_once", False)),
+                    "max_runs": int(stage_fm.get("max_runs", 0) or 0),
+                    "valid_after": str(stage_fm.get("valid_after", "")).strip(),
+                    "expires_after": str(stage_fm.get("expires_after", "")).strip(),
+                    "session_persist": bool(stage_fm.get("session_persist", False)),
+                    "interactive": bool(stage_fm.get("interactive", False)),
+                    "external_triggers": list(stage_fm.get("external_triggers", []) or []),
+                    "semantic_hooks": list(stage_fm.get("semantic_hooks", []) or []),
+                    "tags": list(stage_fm.get("tags", []) or []),
+                    "producers": list(stage_fm.get("producers", []) or []),
+                    "consumers": list(stage_fm.get("consumers", []) or []),
+                    "inputs": list(stage_fm.get("inputs", []) or []),
+                    "module_root": str(job_dir),
+                    "module_parent": anchor_name,
+                }
+            )
 
     return jobs
 
@@ -652,6 +709,10 @@ def detect_cycles(jobs):
 
 
 def write_manifest(jobs: list[dict]) -> None:
+    # User-facing manifest: hide module-internal stages so `clauck list`, the
+    # SessionStart hook, and semantic interpreters see only directly-fireable
+    # jobs. The internals remain visible to dag-runner.py via discover_jobs().
+    visible_jobs = [j for j in jobs if not j.get("module_parent")]
     payload = {
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "jobs_dir": str(JOBS_DIR),
@@ -671,9 +732,11 @@ def write_manifest(jobs: list[dict]) -> None:
                 "prompt_path": j["path"],
                 "module_root": j.get("module_root", ""),
             }
-            for j in jobs
+            for j in visible_jobs
         ],
     }
+    # Cycle detection uses the full job set (including internals) so
+    # module-internal producer chains are validated too.
     dag_errors = detect_cycles(jobs)
     if dag_errors:
         payload["dag_errors"] = dag_errors
@@ -856,6 +919,12 @@ def tick() -> None:
     for job in jobs:
         name = job["name"]
 
+        # Module-internal stages are only reachable via their module's DAG.
+        # Never fire them directly from the tick loop — that would execute
+        # them out of order and without producer context.
+        if job.get("module_parent"):
+            continue
+
         if job.get("disabled") or is_auto_disabled(name):
             continue  # paused (manual or auto); ad-hoc trigger still works
 
@@ -933,6 +1002,16 @@ def trigger(name: str) -> None:
         print(f"[scheduler] no job named {name!r}", file=sys.stderr)
         sys.exit(2)
     job = jobs[0]
+    # Reject direct triggering of module-internal stages — they're only meant
+    # to run as part of their enclosing module's DAG. Fire the anchor instead.
+    parent = job.get("module_parent")
+    if parent:
+        print(
+            f"[scheduler] {name!r} is a module-internal stage of {parent!r}; "
+            f"fire the module anchor ({parent}) instead",
+            file=sys.stderr,
+        )
+        sys.exit(2)
     # If the job has producers, delegate to the DAG runner instead of direct fire.
     if job.get("producers"):
         fire_dag(job, trigger="adhoc")

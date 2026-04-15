@@ -14,10 +14,12 @@ Usage:
     clauck marketplace                    Browse pre-made jobs
     clauck install <marketplace-job>     Install from marketplace
     clauck update [--apply]              Check for / apply updates
+    clauck uninstall [--wipe]            Uninstall (preserves jobs/logs unless --wipe)
     clauck config [set <key> <value>]    Show or edit config
     clauck add <path> [--name N] [--when "schedule"]  Import a file as a job
     clauck inspect <name>                 Inspect a job's config and DAG
-    clauck doctor [-i|--interactive]     Diagnose system health
+    clauck doctor [--fix] [--unsafe] [-i] [<context>]   Diagnose system health
+                                         (default: --dry --safe — analysis only, no mutations)
     clauck peek                          Live-tail all job logs (Ctrl+C to stop)
     clauck version                       Show version
     clauck work <text>                   Explicit semantic command (alias)
@@ -47,12 +49,14 @@ VERSION_FILE = JOBS_DIR / ".version"
 CONFIG_FILE = JOBS_DIR / ".clauck.config.json"
 TRIGGER_SCRIPT = JOBS_DIR / "trigger-job.sh"
 UPDATE_SCRIPT = JOBS_DIR / "update-check.sh"
+UNINSTALL_SCRIPT = JOBS_DIR / "uninstall.sh"
 MARKETPLACE_DIR = HOME / ".claude" / "skills" / "clauck" / "marketplace"
 
 
 KNOWN_COMMANDS = {
     "list", "status", "fire", "pause", "resume", "edit", "logs",
-    "marketplace", "install", "update", "config", "version", "doctor", "peek", "work",
+    "marketplace", "install", "update", "uninstall", "config", "version",
+    "doctor", "peek", "work",
     "add", "inspect", "remove", "delete", "rm", "next",
     "-h", "--help", "help",
 }
@@ -647,6 +651,35 @@ def cmd_update(apply: bool = False) -> None:
     os.execvp(args[0], args)
 
 
+def cmd_uninstall(wipe: bool = False) -> None:
+    """Invoke the LOCAL uninstall.sh that shipped with the installed version.
+
+    Running the remote latest uninstall.sh against an older local install can
+    leave orphaned files behind if the file layout changed between versions.
+    By always using the local copy, the uninstall step is version-matched
+    with the install it's removing.
+
+    Falls back to telling the user how to run it directly if the local copy
+    is missing (e.g., an older install that predates this CLI command).
+    """
+    if not UNINSTALL_SCRIPT.exists():
+        print(
+            "uninstall.sh not found at expected local path.\n"
+            f"  expected: {UNINSTALL_SCRIPT}\n"
+            "Your install predates `clauck uninstall`. Re-run the installer "
+            "once to pick up the local copy, then retry. Or run the remote "
+            "uninstaller:\n"
+            "  bash <(curl -sSL https://raw.githubusercontent.com/CoreyRDean/clauck/main/uninstall.sh)"
+            + ("  --wipe" if wipe else ""),
+            file=sys.stderr,
+        )
+        sys.exit(1)
+    args = ["/bin/bash", str(UNINSTALL_SCRIPT)]
+    if wipe:
+        args.append("--wipe")
+    os.execvp(args[0], args)
+
+
 def cmd_config(args: list[str]) -> None:
     if not args or args[0] != "set":
         config = load_config()
@@ -963,77 +996,345 @@ def cmd_inspect(name: str) -> None:
     print()
 
 
-def cmd_doctor(interactive: bool = False, context: str = "") -> None:
-    """Spawn a clauck-work diagnostic session."""
+def _build_doctor_interpreter_prompt(mode_label: str, context: str) -> str:
+    """Stage-1 doctor interpreter: pick complexity-scaled execution params.
+
+    Unlike the general semantic interpreter, doctor's interpreter only emits
+    the execution parameters (model/effort/turns/budget). There's no
+    deterministic branch — doctor always runs a Claude session.
+    """
+    ctx_line = context.strip() or "(no user context — general health check)"
+    return f"""You are the clauck doctor parameter classifier.
+
+Your job: read the user's context and decide how much firepower the diagnostic session needs.
+
+# Mode
+{mode_label}
+
+# User context
+{ctx_line}
+
+# Complexity rubric
+
+- **Trivial** (system looks healthy, user wants a quick status check, specific known-good question):
+  haiku, low effort, 5 turns, $0.10
+- **Standard** (general diagnostic sweep with fixes, unclear failure, most real-world invocations):
+  sonnet, medium effort, 20 turns, $0.60
+- **Complex** (multi-job pipeline failure, producer graph broken, DAG investigation across many logs, deep architectural suspicion):
+  sonnet, high effort, 40 turns, $1.50
+
+Lean toward Standard if uncertain — doctor is usually asked when something is already weird.
+
+# Output
+
+Return ONLY valid JSON, no prose, no markdown fences:
+
+{{"interpretation": "<distilled one-line diagnostic directive>", "exec_model": "haiku"|"sonnet", "exec_effort": "low"|"medium"|"high", "exec_max_turns": <int>, "exec_max_budget_usd": <float>}}
+
+The `interpretation` field describes what doctor will investigate — imperative mood, 6-14 words, names the concrete suspicion if context gave one. Example good: "Trace pe-pipeline DAG for missing producer resolution". Example bad: "Run doctor to check things".
+"""
+
+
+def _build_doctor_exec_prompt(dry: bool, safe: bool, context: str) -> str:
+    """Build the doctor execution system prompt with mode constraints baked in.
+
+    Four mode combinations:
+      --dry --safe    : analysis only, no mutations, no system file touches
+      --dry --unsafe  : analysis only (unsafe doesn't matter in dry mode)
+      --fix --safe    : may edit user job files; system files read-only → escalate
+      --fix --unsafe  : may edit anything, including system files
+    """
+    if dry:
+        mode_block = """# Mode: DRY (analysis only)
+
+You are in DRY mode. DO NOT mutate any files. No Write, no Edit, no rm, no mv, no file-modifying Bash commands. Read everything you need; propose fixes as a plan for the human to apply.
+
+If you notice fixes that obviously should be applied, list them in a "## Recommended fixes" block at the end with exact commands or diffs. Do not apply them."""
+    elif safe:
+        mode_block = f"""# Mode: FIX / SAFE
+
+You may edit USER job files: `.md` files directly under {JOBS_DIR}/ (flat jobs) and within module directories (e.g. {JOBS_DIR}/<module>/*.md).
+
+You MUST NOT modify these clauck system files:
+  - {JOBS_DIR}/scheduler.py
+  - {JOBS_DIR}/dag-runner.py
+  - {JOBS_DIR}/run-job.sh
+  - {JOBS_DIR}/trigger-job.sh
+  - {JOBS_DIR}/update-check.sh
+  - {JOBS_DIR}/uninstall.sh
+  - {JOBS_DIR}/.version
+  - ~/.claude/hooks/scheduled-jobs-notice.sh
+  - ~/.claude/scheduled-jobs-prompt.md
+  - ~/.local/bin/clauck
+  - ~/.claude/skills/clauck/SKILL.md
+  - ~/Library/LaunchAgents/com.*.claude-scheduler.plist
+
+If the root cause lives in a system file, STOP touching it. Write a "## Escalation: system file mutation requested" block with:
+  - Which system file(s) need changing
+  - The exact diff or change required
+  - Why the change is needed (root cause)
+  - Why this can't be worked around at the user-job layer
+
+The human will review and decide whether to re-run with --unsafe or apply the fix manually. This is a feature, not a limitation: system files affect every user, so changes are gated."""
+    else:
+        mode_block = f"""# Mode: FIX / UNSAFE
+
+You may edit anything under {JOBS_DIR}/ including system files (scheduler.py, dag-runner.py, run-job.sh, etc.) and other clauck components. The user explicitly opted in with --unsafe.
+
+Still prefer minimal-blast-radius fixes. If a user-job fix and a system-file fix would both resolve the issue, pick the user-job fix. System file changes should be deliberate, explained, and tied to a concrete failure — not speculative cleanup."""
+
+    return f"""You are `clauck doctor` — a diagnostic and repair agent for the clauck workflow automation system on this machine.
+
+{mode_block}
+
+# Diagnostic surface
+
+Inspect in order of likelihood:
+1. **LaunchAgent** — `launchctl list | grep claude-scheduler`. If not loaded, that's a blocker.
+2. **Scheduler output** — `tail -50 {JOBS_DIR}/.scheduler-stderr.log` and `{JOBS_DIR}/.scheduler-stdout.log`.
+3. **Manifest freshness** — `stat {MANIFEST}` and compare mtime to now; if older than ~2 minutes the scheduler isn't ticking.
+4. **Manifest errors** — read `{MANIFEST}` and check for `dag_errors` key (cycle detection or missing-producer errors).
+5. **Auto-disabled jobs** — `ls {STATE_DIR}/*.auto-disabled 2>/dev/null`; read each file for the reason.
+6. **Recent failures** — scan `{JOBS_DIR}/*.log` for recent non-zero exit_code tombstones.
+7. **DAG invocation logs** — `{JOBS_DIR}/*-dag-*.log` for pipeline failures.
+8. **Frontmatter errors** — parse each job .md; report malformed YAML.
+9. **Version / update state** — `cat {JOBS_DIR}/.version` and `{STATE_DIR}/.update-available` if present.
+
+# User context
+{context.strip() or "(none — run a general health sweep)"}
+
+# Output shape
+
+Keep output tight. Prefer:
+
+```
+## Health summary
+<one-line overall status>
+
+## Findings
+1. <Issue>: <root cause>. <Fix applied | Recommended fix>.
+2. ...
+
+## Recommended fixes / Escalations
+<only if dry or escalating>
+```
+
+If everything is healthy: a single line. Do not pad.
+"""
+
+
+def cmd_doctor(
+    dry: bool = True,
+    fix: bool = False,
+    safe: bool = True,
+    unsafe: bool = False,
+    interactive: bool = False,
+    context: str = "",
+) -> None:
+    """Diagnose clauck health with mode-gated repair.
+
+    Modes:
+      --dry (default) vs --fix   — analysis-only vs apply fixes to user jobs
+      --safe (default) vs --unsafe — restrict vs allow system-file mutation
+
+    Routes through a stage-1 interpreter that picks model/effort/turns/budget
+    based on the context complexity, matching how `clauck work` scales. Shows
+    a spinner so long-running sessions are visible.
+    """
+    import threading
+    import time as _time
+
+    # Flag resolution: --fix overrides the default --dry; --unsafe overrides
+    # the default --safe. The defaults bias toward the safest combination.
+    if fix:
+        dry = False
+    if unsafe:
+        safe = False
+
+    mode_label = f"--{'fix' if not dry else 'dry'} --{'unsafe' if not safe else 'safe'}"
+
     claude_bin = _find_claude()
     if not claude_bin:
-        die("claude CLI not found")
+        die("claude CLI not found — clauck doctor requires claude on PATH")
 
-    prompt = """Diagnose the clauck scheduled-jobs system on this machine.
+    # ── Spinner ──────────────────────────────────────────────────────────
+    spinner_running = [True]
+    spinner_label = [f"mining intent ({mode_label})"]
+    start_time = _time.time()
 
-Check in order:
-1. Is the LaunchAgent loaded? (`launchctl list | grep claude-scheduler`)
-2. Is scheduler.py producing output? (`tail ~/.claude/scheduled-jobs/.scheduler-stderr.log`)
-3. Is the manifest fresh? (check .manifest.json mtime vs now)
-4. Are any jobs auto-disabled unexpectedly? (check .state/*.auto-disabled)
-5. Are any jobs failing? (scan recent logs for non-zero exit codes)
-6. Is the update check working? (check .state/.update-last-check)
-7. Any frontmatter parse errors in job files?
+    def spinner() -> None:
+        chars = "\u280b\u2819\u2839\u2838\u283c\u2834\u2826\u2827\u2807\u280f"
+        i = 0
+        while spinner_running[0]:
+            elapsed = int(_time.time() - start_time)
+            sys.stderr.write(f"\r  {chars[i % len(chars)]} {spinner_label[0]}... ({elapsed}s)")
+            sys.stderr.flush()
+            i += 1
+            _time.sleep(0.1)
+        sys.stderr.write("\r" + " " * 70 + "\r")
+        sys.stderr.flush()
 
-For each issue found: explain the root cause, attempt a fix if safe, report what you did.
-For issues needing user input: explain what's needed and how to fix it.
-If everything is healthy, say so concisely."""
+    spin_thread = threading.Thread(target=spinner, daemon=True)
+    spin_thread.start()
 
-    if context:
-        prompt += f"\n\n## User-provided context\n\n{context}"
+    # ── Stage 1: complexity classifier ───────────────────────────────────
+    empty_mcp = STATE_DIR / ".empty-mcp-config.json"
+    if not empty_mcp.exists():
+        STATE_DIR.mkdir(parents=True, exist_ok=True)
+        empty_mcp.write_text('{"mcpServers":{}}')
 
-    if interactive:
-        # Run diagnostic, then open interactive session for follow-up
-        result = subprocess.run(
-            [claude_bin, "-p", prompt,
-             "--append-system-prompt", f"You are clauck doctor. Jobs dir: {JOBS_DIR}. State: {STATE_DIR}. Manifest: {MANIFEST}.",
-             "--dangerously-skip-permissions",
-             "--permission-mode", "bypassPermissions",
-             "--max-turns", "15", "--max-budget-usd", "0.50",
-             "--model", "sonnet", "--output-format", "text",
-             "--setting-sources", ""],
+    interpreter_prompt = _build_doctor_interpreter_prompt(mode_label, context)
+    user_prompt = "Classify this doctor invocation."
+
+    import re as _re
+    try:
+        result_s1 = subprocess.run(
+            [claude_bin, "-p", user_prompt,
+             "--append-system-prompt", interpreter_prompt,
+             "--model", "sonnet",
+             "--max-turns", "2",
+             "--max-budget-usd", "0.15",
+             "--output-format", "json",
+             "--setting-sources", "",
+             "--strict-mcp-config",
+             "--mcp-config", str(empty_mcp)],
             capture_output=True, text=True,
         )
-        print(result.stdout.strip())
-        # Get session ID for interactive follow-up
-        # Re-run with json to capture session_id
-        result_json = subprocess.run(
-            [claude_bin, "-p", "Summarize what you found in one line.",
-             "--append-system-prompt", f"You are clauck doctor. Jobs dir: {JOBS_DIR}.",
-             "--dangerously-skip-permissions",
-             "--permission-mode", "bypassPermissions",
-             "--max-turns", "1", "--max-budget-usd", "0.05",
-             "--model", "haiku", "--output-format", "json",
-             "--setting-sources", ""],
-            capture_output=True, text=True,
-        )
+    except Exception:
+        spinner_running[0] = False
+        spin_thread.join(timeout=0.5)
+        raise
+
+    routing: dict = {}
+    interpreter_error = ""
+    if result_s1.returncode == 0 and result_s1.stdout.strip():
         try:
-            sid = json.loads(result_json.stdout).get("session_id", "")
-            if sid:
-                print(f"\n  Opening interactive session for follow-up...")
-                os.execvp(claude_bin, [claude_bin, "--resume", sid])
-        except (json.JSONDecodeError, KeyError):
-            pass
-    else:
-        result = subprocess.run(
-            [claude_bin, "-p", prompt,
-             "--append-system-prompt", f"You are clauck doctor. Jobs dir: {JOBS_DIR}. State: {STATE_DIR}. Manifest: {MANIFEST}.",
-             "--dangerously-skip-permissions",
-             "--permission-mode", "bypassPermissions",
-             "--max-turns", "15", "--max-budget-usd", "0.50",
-             "--model", "sonnet", "--output-format", "text",
-             "--setting-sources", ""],
-            capture_output=True, text=True,
-        )
-        if result.stdout.strip():
-            print(result.stdout.strip())
-        if result.returncode != 0 and result.stderr.strip():
-            print(result.stderr.strip(), file=sys.stderr)
+            envelope = json.loads(result_s1.stdout)
+            inner = envelope.get("result", "").strip()
+            match = _re.search(r'\{[\s\S]*\}', inner)
+            if match:
+                routing = json.loads(match.group(0))
+            else:
+                interpreter_error = f"no JSON in interpreter output: {inner[:200]}"
+        except (json.JSONDecodeError, ValueError) as e:
+            interpreter_error = f"interpreter JSON parse failed: {e}"
+    elif result_s1.returncode != 0:
+        interpreter_error = f"interpreter exit {result_s1.returncode}: {result_s1.stderr[:200]}"
+
+    if not routing:
+        if interpreter_error:
+            sys.stderr.write(f"\r  ! interpreter fallback: {interpreter_error[:120]}\n")
+            sys.stderr.flush()
+        routing = {
+            "interpretation": "Run standard diagnostic sweep",
+            "exec_model": "sonnet",
+            "exec_effort": "medium",
+            "exec_max_turns": 20,
+            "exec_max_budget_usd": 0.60,
+        }
+
+    interpretation = routing.get("interpretation", "Run diagnostic sweep")
+    exec_model = routing.get("exec_model", "sonnet")
+    exec_effort = routing.get("exec_effort", "medium")
+    exec_max_turns = str(routing.get("exec_max_turns", 20))
+    exec_max_budget = str(routing.get("exec_max_budget_usd", 0.60))
+
+    # Print interpretation + separator, then resume spinner with new label.
+    spinner_running[0] = False
+    spin_thread.join(timeout=0.5)
+    print(f"  \u2192 {interpretation} [{mode_label}]")
+    print(f"  {'─' * 60}")
+
+    # ── Stage 2: diagnostic execution ────────────────────────────────────
+    exec_prompt = _build_doctor_exec_prompt(dry=dry, safe=safe, context=context)
+
+    spinner_running[0] = True
+    spinner_label[0] = f"diagnosing ({exec_model}, {exec_effort} effort)"
+    start_time = _time.time()
+    spin_thread = threading.Thread(target=spinner, daemon=True)
+    spin_thread.start()
+
+    # Permission strategy:
+    #   dry  → no bypass, default permission mode (tools that mutate prompt
+    #          and would fail in non-interactive). Read tools work.
+    #   fix  → bypass with allowlist scoped to the writable surface.
+    cli = [claude_bin, "-p", "Run the doctor diagnostic per your system prompt.",
+           "--append-system-prompt", exec_prompt,
+           "--max-turns", exec_max_turns,
+           "--max-budget-usd", exec_max_budget,
+           "--model", exec_model,
+           "--output-format", "json",
+           "--setting-sources", ""]
+
+    if not dry:
+        # Fix mode: need write permission. --safe keeps the allowlist tight to
+        # .md files; --unsafe opens the full scheduled-jobs tree.
+        if safe:
+            allowlist = {
+                "permissions": {
+                    "defaultMode": "bypassPermissions",
+                    "allow": [
+                        "Read(**)",
+                        "Bash(launchctl *)",
+                        "Bash(ls *)",
+                        "Bash(cat *)",
+                        "Bash(tail *)",
+                        "Bash(stat *)",
+                        "Bash(grep *)",
+                        "Bash(find *)",
+                        # User-job writes only — not system scripts.
+                        f"Write({JOBS_DIR}/*.md)",
+                        f"Edit({JOBS_DIR}/*.md)",
+                        f"Write({JOBS_DIR}/*/**.md)",
+                        f"Edit({JOBS_DIR}/*/**.md)",
+                    ],
+                }
+            }
+        else:
+            allowlist = {
+                "permissions": {
+                    "defaultMode": "bypassPermissions",
+                    "allow": [
+                        "Bash(*)", "Read(**)", "Write(**)", "Edit(**)",
+                        f"Write({JOBS_DIR}/**)",
+                        f"Edit({JOBS_DIR}/**)",
+                    ],
+                }
+            }
+        cli += ["--dangerously-skip-permissions",
+                "--permission-mode", "bypassPermissions",
+                "--settings", json.dumps(allowlist)]
+
+    try:
+        result = subprocess.run(cli, capture_output=True, text=True)
+    finally:
+        spinner_running[0] = False
+        spin_thread.join(timeout=0.5)
+
+    try:
+        envelope = json.loads(result.stdout) if result.stdout else {}
+    except (json.JSONDecodeError, ValueError):
+        envelope = {}
+
+    claude_result = envelope.get("result", "").strip()
+    is_error = envelope.get("is_error", result.returncode != 0)
+    session_id = envelope.get("session_id", "")
+
+    if claude_result:
+        print(claude_result)
+
+    if is_error:
+        err_text = envelope.get("errors") or result.stderr
+        if err_text:
+            if isinstance(err_text, list):
+                err_text = "; ".join(str(e) for e in err_text)
+            print(str(err_text).strip(), file=sys.stderr)
+        sys.exit(1)
+
+    # Optional interactive follow-up on a resolvable session.
+    if interactive and session_id:
+        print("\n  Opening interactive session for follow-up...")
+        os.execvp(claude_bin, [claude_bin, "--resume", session_id])
 
 
 def _find_claude() -> str | None:
@@ -1211,7 +1512,7 @@ def cmd_semantic(text: str) -> None:
 
     # ── Spinner (wraps both stages) ──────────────────────────────────────
     spinner_running = [True]
-    spinner_label = ["interpreting"]
+    spinner_label = ["mining intent"]
     start_time = _time.time()
 
     def spinner():
@@ -1459,6 +1760,8 @@ def main() -> None:
         cmd_install_marketplace(rest[0])
     elif cmd == "update":
         cmd_update(apply="--apply" in rest)
+    elif cmd == "uninstall":
+        cmd_uninstall(wipe="--wipe" in rest)
     elif cmd == "config":
         cmd_config(rest)
     elif cmd == "version":
@@ -1488,10 +1791,27 @@ def main() -> None:
     elif cmd == "inspect" and rest:
         cmd_inspect(rest[0])
     elif cmd == "doctor":
+        # Flag parsing: modes are two pairs with defaults biased toward safety.
+        #   --dry (default) / --fix   — analysis-only vs apply fixes
+        #   --safe (default) / --unsafe — restrict vs allow system-file mutation
         interactive = "-i" in rest or "--interactive" in rest
-        # Filter out flags, join remaining as context
-        context_parts = [r for r in rest if not r.startswith("-")]
-        cmd_doctor(interactive=interactive, context=" ".join(context_parts))
+        fix_flag = "--fix" in rest
+        unsafe_flag = "--unsafe" in rest
+        # Explicit --dry and --safe are accepted but are already defaults.
+        dry_flag = "--dry" in rest or not fix_flag
+        safe_flag = "--safe" in rest or not unsafe_flag
+        flag_names = {
+            "-i", "--interactive", "--dry", "--fix", "--safe", "--unsafe",
+        }
+        context_parts = [r for r in rest if not r.startswith("-") and r not in flag_names]
+        cmd_doctor(
+            dry=dry_flag,
+            fix=fix_flag,
+            safe=safe_flag,
+            unsafe=unsafe_flag,
+            interactive=interactive,
+            context=" ".join(context_parts),
+        )
     elif cmd == "work":
         # `clauck work <text>` is an explicit alias for semantic fallthrough,
         # avoiding conflicts if semantic text starts with a subcommand name.

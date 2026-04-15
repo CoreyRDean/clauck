@@ -4,7 +4,22 @@ All notable changes to clauck are documented here. Format follows [Keep a Change
 
 ## [Unreleased]
 
-Nothing yet.
+### Fixed
+
+- **Module-internal DAG resolution:** `dag-runner.py` now sees stages inside `<module>/` directories. Previously, a module anchor declaring `producers: [stage-a, stage-b]` caused the DAG runner to exit 4 with "Job not found in manifest" because `discover_jobs()` only surfaced flat jobs and module anchors, not internal stages. Fixes pe-pipeline (and any future multi-stage module) silently dropping all downstream work.
+
+### Added
+
+- **`clauck uninstall [--wipe]`:** exec's the locally-installed `uninstall.sh` so the file layout always matches the version being removed. Remote-curl uninstall is the fallback only when the local copy is absent (older installs). Resolves #20.
+- **`clauck doctor` modes:** `--dry` (default) / `--fix` for mutation opt-in, and `--safe` (default) / `--unsafe` for system-file mutation opt-in. Dry + safe is the new default — doctor no longer mutates unprompted. Fix+safe edits user jobs but escalates when it detects system-file repairs (scheduler.py, run-job.sh, etc.) with a diff + reason so the human can decide whether to re-run `--unsafe`.
+- **`clauck doctor` interpreter routing:** stage-1 classifier scales model/effort/turns/budget by context complexity (matching how `clauck work` does). Previously pinned to Sonnet/15 turns/$0.50 regardless of task size.
+- **`clauck doctor` spinner:** visible progress indicator during interpretation and execution.
+- `install.sh` ships `uninstall.sh` to `~/.claude/scheduled-jobs/uninstall.sh`.
+
+### Changed
+
+- Semantic CLI spinner label: "interpreting" → "mining intent".
+- Post-install banner: points at `clauck uninstall` instead of the remote curl one-liner.
 
 ## [v1.3.0] — 2026-04-14
 

@@ -218,6 +218,10 @@ install_files() {
     install_file "$repo/lib/dag-runner.py"              "$HOME/.claude/scheduled-jobs/dag-runner.py"  755
     install_file "$repo/lib/scheduled-jobs-prompt.md" "$HOME/.claude/scheduled-jobs-prompt.md"      644
     install_file "$repo/lib/scheduled-jobs-notice.sh" "$HOME/.claude/hooks/scheduled-jobs-notice.sh" 755
+    # Ship uninstall.sh alongside the runtime so `clauck uninstall` always has
+    # a local, version-matched copy to invoke. Running the remote latest
+    # against an older local install can leave orphaned files behind.
+    install_file "$repo/uninstall.sh"                 "$HOME/.claude/scheduled-jobs/uninstall.sh"   755
 
     # Record the installed version for the auto-updater.
     if [ -f "$repo/VERSION" ]; then
@@ -472,7 +476,8 @@ ${C_BOLD}Next steps:${C_RESET}
        cat ~/.claude/scheduled-jobs/.manifest.json | python3 -m json.tool
        ls ~/.claude/scheduled-jobs/  ~/.claude/skills/clauck/marketplace/
   5. To uninstall:
-       bash <(curl -sSL $REPO_URL/raw/$REPO_BRANCH/uninstall.sh)
+       clauck uninstall           ${C_DIM}# preserves jobs, state, and logs${C_RESET}
+       clauck uninstall --wipe    ${C_DIM}# also removes ~/.claude/scheduled-jobs${C_RESET}
 
 ${C_DIM}Full docs: ~/.claude/skills/clauck/SKILL.md${C_RESET}
 
