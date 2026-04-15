@@ -22,6 +22,8 @@ semantic_hooks:
   - Need a summary of recent downloads
 ---
 
+**Important:** Replace any `~/` paths below with the absolute path using the `User home` value from your Runtime Context (e.g., `/Users/<username>/Downloads` not `~/Downloads`). The Read tool does not expand tilde.
+
 <!--
 CUSTOMIZE BEFORE INSTALLING (optional):
 - Change the `path` in external_triggers if you want to watch a different folder.

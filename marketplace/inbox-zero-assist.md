@@ -21,6 +21,8 @@ semantic_hooks:
   - Looking for an inbox-zero assistant
 ---
 
+**Important:** Replace any `~/` paths below with the absolute path using the `User home` value from your Runtime Context (e.g., `/Users/<username>/Downloads` not `~/Downloads`). The Read tool does not expand tilde.
+
 <!--
 CUSTOMIZE BEFORE INSTALLING:
 1. Adjust the cron time (default: 22:00 UTC = 5pm ET end of workday).

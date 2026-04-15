@@ -21,6 +21,8 @@ semantic_hooks:
   - Looking for a PR review digest
 ---
 
+**Important:** Replace any `~/` paths below with the absolute path using the `User home` value from your Runtime Context (e.g., `/Users/<username>/Downloads` not `~/Downloads`). The Read tool does not expand tilde.
+
 <!--
 CUSTOMIZE BEFORE INSTALLING:
 1. Replace the Slack channel TODO with your DM channel ID, or switch to local file.

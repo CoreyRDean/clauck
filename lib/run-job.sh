@@ -323,6 +323,35 @@ fi
 
 EXIT_CODE=$?
 
+# --- Stale session-ID retry: if --resume failed, retry without it ---
+# If exit was non-zero, session persistence was active, and the error looks
+# session-related, drop the stale session-id and retry once from scratch.
+if [ "$EXIT_CODE" -ne 0 ] && [ "${CLAUDE_JOB_SESSION_PERSIST:-}" = "1" ] && [ -f "$SESSION_ID_FILE" ]; then
+  # Check last ~40 lines of log for session/resume-related error text
+  if tail -40 "$LOG_FILE" 2>/dev/null | grep -qi -e "session" -e "resume"; then
+    echo "stage=session_retry stale_session_id=$(cat "$SESSION_ID_FILE" 2>/dev/null | tr -d '[:space:]')" >> "$LOG_FILE"
+    echo "--- retrying without --resume (stale session) ---" >> "$LOG_FILE"
+    rm -f "$SESSION_ID_FILE"
+    # Rebuild CLAUDE_ARGS without --resume
+    CLAUDE_ARGS=(
+      -p "$PROMPT_BODY"
+      --append-system-prompt "$APPENDED_SYSTEM_PROMPT"
+      --dangerously-skip-permissions
+      --effort "$EFFORT"
+      --max-turns "$MAX_TURNS"
+      --max-budget-usd "$MAX_BUDGET_USD"
+      --output-format json
+    )
+    [ -n "$MODEL" ] && CLAUDE_ARGS+=(--model "$MODEL")
+    [ -n "${CLAUDE_JOB_SETTING_SOURCES_SET:-}" ] && CLAUDE_ARGS+=(--setting-sources "${CLAUDE_JOB_SETTING_SOURCES:-}")
+    if [ "${CLAUDE_JOB_STRICT_MCP_CONFIG:-}" = "1" ]; then
+      CLAUDE_ARGS+=(--strict-mcp-config --mcp-config "$EMPTY_MCP_CONFIG")
+    fi
+    "$CLAUDE_BIN" "${CLAUDE_ARGS[@]}" >> "$LOG_FILE" 2>&1
+    EXIT_CODE=$?
+  fi
+fi
+
 # Capture session_id for future runs (session persistence).
 if [ "${CLAUDE_JOB_SESSION_PERSIST:-}" = "1" ]; then
   NEW_SID="$(grep -o '"session_id":"[^"]*"' "$LOG_FILE" 2>/dev/null | tail -1 | sed 's/"session_id":"//;s/"$//')"

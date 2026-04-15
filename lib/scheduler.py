@@ -708,6 +708,35 @@ def fire(job: dict, trigger: str = "scheduled") -> None:
     )
 
 
+def fire_dag(job: dict, trigger: str = "scheduled") -> None:
+    """Launch dag-runner.py in a detached subprocess for a pipeline job.
+
+    Builds the same env-var set as fire() (plus CLAUDE_JOB_TRIGGER) and
+    delegates execution to dag-runner.py, which handles topological sort,
+    parallel layer execution, and output injection.
+    """
+    env = os.environ.copy()
+    env["CLAUDE_JOB_NAME"] = job["name"]
+    env["CLAUDE_JOB_PATH"] = job["path"]
+    env["CLAUDE_JOB_CWD"] = job["cwd"]
+    env["CLAUDE_JOB_MAX_TURNS"] = str(job["max_turns"])
+    env["CLAUDE_JOB_MAX_BUDGET_USD"] = str(job["max_budget_usd"])
+    env["CLAUDE_JOB_EFFORT"] = job["effort"]
+    env["CLAUDE_JOB_CRON"] = job["cron"]
+    env["CLAUDE_JOB_MODEL"] = job.get("model", "")
+    env["CLAUDE_JOB_TRIGGER"] = trigger
+    env["CLAUDE_JOB_FIRED_AT"] = datetime.now(timezone.utc).isoformat()
+    subprocess.Popen(
+        ["/usr/bin/python3", str(DAG_RUNNER), job["name"]],
+        env=env,
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        start_new_session=True,
+        close_fds=True,
+    )
+
+
 # ---------- update check ----------
 
 
@@ -838,27 +867,7 @@ def tick() -> None:
             set_last_run(name, minute_start)
             print(f"[scheduler] firing {name} @ {now.isoformat()} (external trigger)")
             if job.get("producers"):
-                # Delegate to DAG runner
-                env = os.environ.copy()
-                env["CLAUDE_JOB_NAME"] = job["name"]
-                env["CLAUDE_JOB_PATH"] = job["path"]
-                env["CLAUDE_JOB_CWD"] = job["cwd"]
-                env["CLAUDE_JOB_MAX_TURNS"] = str(job["max_turns"])
-                env["CLAUDE_JOB_MAX_BUDGET_USD"] = str(job["max_budget_usd"])
-                env["CLAUDE_JOB_EFFORT"] = job["effort"]
-                env["CLAUDE_JOB_CRON"] = job["cron"]
-                env["CLAUDE_JOB_MODEL"] = job.get("model", "")
-                env["CLAUDE_JOB_TRIGGER"] = "external"
-                env["CLAUDE_JOB_FIRED_AT"] = datetime.now(timezone.utc).isoformat()
-                subprocess.Popen(
-                    ["/usr/bin/python3", str(DAG_RUNNER), job["name"]],
-                    env=env,
-                    stdin=subprocess.DEVNULL,
-                    stdout=subprocess.DEVNULL,
-                    stderr=subprocess.DEVNULL,
-                    start_new_session=True,
-                    close_fds=True,
-                )
+                fire_dag(job, trigger="external")
             else:
                 fire(job, trigger="external")
             fired = True
@@ -870,27 +879,7 @@ def tick() -> None:
                         set_last_run(name, minute_start)
                         print(f"[scheduler] firing {name} @ {now.isoformat()}")
                         if job.get("producers"):
-                            # Delegate to DAG runner
-                            env = os.environ.copy()
-                            env["CLAUDE_JOB_NAME"] = job["name"]
-                            env["CLAUDE_JOB_PATH"] = job["path"]
-                            env["CLAUDE_JOB_CWD"] = job["cwd"]
-                            env["CLAUDE_JOB_MAX_TURNS"] = str(job["max_turns"])
-                            env["CLAUDE_JOB_MAX_BUDGET_USD"] = str(job["max_budget_usd"])
-                            env["CLAUDE_JOB_EFFORT"] = job["effort"]
-                            env["CLAUDE_JOB_CRON"] = job["cron"]
-                            env["CLAUDE_JOB_MODEL"] = job.get("model", "")
-                            env["CLAUDE_JOB_TRIGGER"] = "scheduled"
-                            env["CLAUDE_JOB_FIRED_AT"] = datetime.now(timezone.utc).isoformat()
-                            subprocess.Popen(
-                                ["/usr/bin/python3", str(DAG_RUNNER), job["name"]],
-                                env=env,
-                                stdin=subprocess.DEVNULL,
-                                stdout=subprocess.DEVNULL,
-                                stderr=subprocess.DEVNULL,
-                                start_new_session=True,
-                                close_fds=True,
-                            )
+                            fire_dag(job, trigger="scheduled")
                         else:
                             fire(job)
                         fired = True
@@ -916,17 +905,7 @@ def trigger(name: str) -> None:
     job = jobs[0]
     # If the job has producers, delegate to the DAG runner instead of direct fire.
     if job.get("producers"):
-        env = os.environ.copy()
-        env["CLAUDE_JOB_TRIGGER"] = "adhoc"
-        subprocess.Popen(
-            ["/usr/bin/python3", str(DAG_RUNNER), name],
-            env=env,
-            stdin=subprocess.DEVNULL,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            start_new_session=True,
-            close_fds=True,
-        )
+        fire_dag(job, trigger="adhoc")
     else:
         fire(job, trigger="adhoc")
     print(f"[scheduler] ad-hoc triggered {name}")

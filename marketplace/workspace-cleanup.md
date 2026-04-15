@@ -21,6 +21,8 @@ semantic_hooks:
   - Need to find old screenshots or unnamed files cluttering my workspace
 ---
 
+**Important:** Replace any `~/` paths below with the absolute path using the `User home` value from your Runtime Context (e.g., `/Users/<username>/Downloads` not `~/Downloads`). The Read tool does not expand tilde.
+
 <!--
 CUSTOMIZE BEFORE INSTALLING (optional):
 - Change the scanned directories (default: ~/Desktop and ~/Documents, non-recursive).
