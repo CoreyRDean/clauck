@@ -272,11 +272,22 @@ CFGEOF
         [ -f "$job" ] || continue
         local name; name="$(basename "$job")"
         local dst="$HOME/.claude/scheduled-jobs/$name"
-        if [ -f "$dst" ]; then
-            warn "preserving existing user job: $dst (shipped default not installed)"
-        else
+        if [ ! -f "$dst" ]; then
             install_file "$job" "$dst" 644
+            continue
         fi
+        # Compare content — if identical, skip silently.
+        if diff -q "$job" "$dst" >/dev/null 2>&1; then
+            ok "up-to-date: $dst"
+            continue
+        fi
+        # Content differs. Back up user's version, overwrite with shipped default.
+        # Rationale: default jobs (heartbeat, clauck-work) are infrastructure —
+        # upgrades should propagate. User customizations are preserved as .backup.
+        local backup="${dst}.backup-$(date -u +%Y%m%dT%H%M%SZ)"
+        cp "$dst" "$backup"
+        install_file "$job" "$dst" 644
+        warn "updated default job: $dst (your previous copy saved to: $backup)"
     done
 }
 

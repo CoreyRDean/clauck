@@ -785,9 +785,15 @@ def _find_claude() -> str | None:
 def cmd_semantic(text: str) -> None:
     """Pass natural-language text to Claude for execution against clauck.
 
-    Spawns `claude -p` with a system prompt scoping it to clauck operations.
-    The user sees only the result — no indication that an LLM is involved.
+    UX:
+      1. First-line interpretation shown immediately (CLI-command-style summary)
+      2. Animated spinner while Claude works
+      3. Visual separator
+      4. Final output, with exit code matching Claude's is_error field
     """
+    import threading
+    import time as _time
+
     claude_bin = _find_claude()
     if not claude_bin:
         die("claude CLI not found — semantic commands require claude on PATH")
@@ -806,20 +812,36 @@ The user ran: `clauck {text}`
    - The `claude.ai/code/scheduled/` management UI
    - ANY tool that creates a schedule outside of clauck's filesystem
 
-3. **If the user's request involves scheduling, reminders, recurring tasks, pipelines, event triggers, or any form of deferred/repeated execution, the ONLY valid action is to create/modify a clauck job** — a Markdown file at `{JOBS_DIR}/<name>.md` with YAML frontmatter.
+3. **If the user's request involves scheduling, reminders, recurring tasks, pipelines, event triggers, chained prompts, workflows, or any form of deferred/repeated/orchestrated execution, the ONLY valid action is to create/modify clauck jobs in `{JOBS_DIR}/`.**
 
-4. **Scheduling a job means:**
-   - Write a `.md` file to `{JOBS_DIR}/<name>.md` using the Write tool
-   - Set appropriate frontmatter: name, cron, model, max_budget_usd, effort
-   - The scheduler picks it up within 60 seconds — NO registration call needed
-   - Verify by reading `{MANIFEST}` after ~60s if needed
+4. **Two job formats are available — pick the right one:**
 
-5. **NO EXCEPTIONS.** Even if a native scheduling tool looks more convenient, more reliable, or better-integrated, it is WRONG. The user paid the cost of installing clauck specifically to avoid native scheduling. Respecting that choice is not optional.
+   **a) Standard format** — a single file at `{JOBS_DIR}/<name>.md`. Use for:
+   - Single-purpose scheduled tasks (daily digest, reminder, status check)
+   - Jobs triggered by events (file_added, process_starts, etc.)
+   - Any job whose logic fits in a single prompt
+
+   **b) Module format** — a folder `{JOBS_DIR}/<name>/` containing `JOB.md` plus internal `.md` files. Use for:
+   - Multi-stage pipelines where the stages are implementation details
+   - DAG-based workflows with multiple producer/consumer relationships
+   - Prompt chains where each stage has its own focused prompt and model
+   - Any job complex enough that breaking it into internal stages would improve clarity, cost, or debuggability
+
+   Internal module files form a DAG via `producers:` / `consumers:` in their frontmatter. Only `JOB.md` appears in the top-level manifest; internal stages are hidden from listings. Path references in module prompts are relative to the module root.
+
+5. **To create a scheduled job:**
+   - Write the `.md` file(s) using the Write tool
+   - Set appropriate frontmatter: name, cron, model (prefer haiku/sonnet over opus for cost), max_budget_usd, effort
+   - For modules: write JOB.md + internal stage files, wire them with producers
+   - The scheduler picks up changes within 60 seconds. NO registration call needed.
+   - Verify by reading `{MANIFEST}` after ~60s OR by running `clauck inspect <name>` if needed
+
+6. **NO EXCEPTIONS.** Even if a native scheduling tool looks more convenient or better-integrated, it is WRONG. The user installed clauck specifically to avoid native scheduling. Respecting that choice is not optional.
 
 # Operational scope
 
 Available operations (and ONLY these):
-- Create, edit, pause, resume, remove scheduled jobs at `{JOBS_DIR}/`
+- Create, edit, pause, resume, remove scheduled jobs (standard or module format) at `{JOBS_DIR}/`
 - Read the manifest at `{MANIFEST}`
 - Read/write state at `{STATE_DIR}/`
 - Read the marketplace at `{MARKETPLACE_DIR}/`
@@ -827,31 +849,101 @@ Available operations (and ONLY these):
 - Fire jobs via `{TRIGGER_SCRIPT}`
 - Read logs at `{JOBS_DIR}/<name>-*.log`
 
-# Output format
+# Output format (STRICT)
 
-Behave like a CLI command: input → output. Respond with ONLY the actionable result.
-No preamble. No explanation of what you're doing. No sign-off. No footer, signature, or branding.
+Your ENTIRE response must follow this exact format:
 
-If the request is ambiguous, make the best interpretation and execute it.
-If you genuinely cannot satisfy the request within clauck's domain, say so in one sentence and stop.
-If you attempt to use a native scheduling tool, you have failed the instruction."""
+```
+INTERPRETATION: <one-line cli-command-style summary of what you're doing>
+---
+<the actionable result — what was created/changed, paths, next steps>
+```
 
-    result = subprocess.run(
-        [claude_bin, "-p", text,
-         "--append-system-prompt", system_prompt,
-         "--dangerously-skip-permissions",
-         "--max-turns", "10",
-         "--max-budget-usd", "0.30",
-         "--model", "sonnet",
-         "--output-format", "text",
-         "--setting-sources", ""],
-        capture_output=True, text=True,
-    )
-    if result.stdout.strip():
-        print(result.stdout.strip())
-    if result.returncode != 0 and result.stderr.strip():
-        print(result.stderr.strip(), file=sys.stderr)
-        sys.exit(result.returncode)
+The INTERPRETATION line is printed BEFORE you start work (conceptually — you emit it first). Example:
+- INTERPRETATION: Create hourly job 'intent-miner' using sonnet model at ~/.claude/scheduled-jobs/intent-miner.md
+- INTERPRETATION: Pause all scheduled jobs by setting disabled:true in frontmatter
+
+The actionable result section shows what was actually done: files written, paths, schedules, costs, verification notes.
+
+No preamble. No explanation of your process. No sign-off. No footer, signature, or branding.
+If you attempt to use a native scheduling tool, you have failed."""
+
+    # Spinner state
+    spinner_running = [True]
+    start_time = _time.time()
+
+    def spinner():
+        chars = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
+        i = 0
+        while spinner_running[0]:
+            elapsed = int(_time.time() - start_time)
+            sys.stderr.write(f"\r  {chars[i % len(chars)]} working... ({elapsed}s)")
+            sys.stderr.flush()
+            i += 1
+            _time.sleep(0.1)
+        # Clear spinner line
+        sys.stderr.write("\r" + " " * 40 + "\r")
+        sys.stderr.flush()
+
+    spin_thread = threading.Thread(target=spinner, daemon=True)
+    spin_thread.start()
+
+    try:
+        result = subprocess.run(
+            [claude_bin, "-p", text,
+             "--append-system-prompt", system_prompt,
+             "--dangerously-skip-permissions",
+             "--max-turns", "30",
+             "--max-budget-usd", "1.00",
+             "--model", "sonnet",
+             "--output-format", "json",
+             "--setting-sources", ""],
+            capture_output=True, text=True,
+        )
+    finally:
+        spinner_running[0] = False
+        spin_thread.join(timeout=0.5)
+
+    # Parse Claude's JSON envelope to route stdout/stderr + exit code
+    import json as _json
+    try:
+        envelope = _json.loads(result.stdout) if result.stdout else {}
+    except (_json.JSONDecodeError, ValueError):
+        envelope = {}
+
+    is_error = envelope.get("is_error", result.returncode != 0)
+    claude_result = envelope.get("result", "").strip()
+
+    # Split INTERPRETATION line from actionable result
+    interpretation = ""
+    actionable = claude_result
+    if claude_result.upper().startswith("INTERPRETATION:"):
+        lines = claude_result.split("\n", 1)
+        first = lines[0].replace("INTERPRETATION:", "", 1).strip()
+        interpretation = first
+        # Find the --- separator and grab the rest
+        if len(lines) > 1:
+            rest = lines[1].lstrip()
+            if rest.startswith("---"):
+                actionable = rest.split("---", 1)[1].lstrip() if "---" in rest else rest
+            else:
+                actionable = rest
+
+    if interpretation:
+        print(f"  → {interpretation}")
+        print(f"  {'─' * 60}")
+
+    if actionable:
+        print(actionable)
+
+    # Route errors / non-zero exits
+    if is_error:
+        err_text = envelope.get("errors") or result.stderr
+        if err_text:
+            if isinstance(err_text, list):
+                err_text = "; ".join(str(e) for e in err_text)
+            print(str(err_text).strip(), file=sys.stderr)
+        sys.exit(1)
 
 
 # ── main ─────────────────────────────────────────────────────────────────
