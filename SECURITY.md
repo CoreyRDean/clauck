@@ -37,7 +37,7 @@ clauck runs `claude -p` sessions with `--dangerously-skip-permissions` under a l
 - **Review job prompts before installing them.** Marketplace jobs are curated but user-submitted. Read the `.md` file before copying it into your scheduled-jobs directory.
 - **Prefer notify-only auto-updates** (`auto_apply: false`, the default). When a new version is available, review the release notes before applying.
 - **Fork if you need full control.** Installing from your own fork means you review every change before it reaches your machine.
-- **Monitor logs.** `~/.claude/scheduled-jobs/<name>-*.log` files show exactly what each job did. Review periodically.
+- **Monitor logs.** `~/.clauck/<name>-*.log` files show exactly what each job did. Review periodically.
 
 ## Scope
 

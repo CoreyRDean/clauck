@@ -39,14 +39,14 @@ fi
 
 say "Removing runtime scripts, skill, and marketplace"
 FILES=(
-    "$HOME/.claude/scheduled-jobs/scheduler.py"
-    "$HOME/.claude/scheduled-jobs/run-job.sh"
-    "$HOME/.claude/scheduled-jobs/trigger-job.sh"
-    "$HOME/.claude/scheduled-jobs/update-check.sh"
-    "$HOME/.claude/scheduled-jobs/dag-runner.py"
-    "$HOME/.claude/scheduled-jobs/uninstall.sh"
-    "$HOME/.claude/scheduled-jobs/.version"
-    "$HOME/.claude/scheduled-jobs-prompt.md"
+    "$HOME/.clauck/scheduler.py"
+    "$HOME/.clauck/run-job.sh"
+    "$HOME/.clauck/trigger-job.sh"
+    "$HOME/.clauck/update-check.sh"
+    "$HOME/.clauck/dag-runner.py"
+    "$HOME/.clauck/uninstall.sh"
+    "$HOME/.clauck/.version"
+    "$HOME/.clauck/prompt.md"
     "$HOME/.claude/hooks/scheduled-jobs-notice.sh"
     "$HOME/.claude/skills/clauck/SKILL.md"
     "$HOME/.local/bin/clauck"
@@ -112,12 +112,17 @@ fi
 
 if [ "$WIPE" -eq 1 ]; then
     say "Removing job files, state, config, and logs (--wipe)"
-    rm -rf "$HOME/.claude/scheduled-jobs"
-    ok "removed: $HOME/.claude/scheduled-jobs"
+    rm -rf "$HOME/.clauck"
+    ok "removed: $HOME/.clauck"
+    # Legacy cleanup: remove old path if it still exists
+    if [ -d "$HOME/.claude/scheduled-jobs" ]; then
+        rm -rf "$HOME/.claude/scheduled-jobs"
+        ok "removed legacy dir: $HOME/.claude/scheduled-jobs"
+    fi
     # Also try to clean an empty hooks dir
     [ -d "$HOME/.claude/hooks" ] && rmdir "$HOME/.claude/hooks" 2>/dev/null && ok "removed empty dir: ~/.claude/hooks"
 else
-    warn "Kept ~/.claude/scheduled-jobs/ (job files, state, logs, config). Use --wipe to remove."
+    warn "Kept ~/.clauck/ (job files, state, logs, config). Use --wipe to remove."
 fi
 
 printf "\n%s%s✓ clauck uninstalled%s\n\n" "$C_BOLD" "$C_OK" "$C_RESET"

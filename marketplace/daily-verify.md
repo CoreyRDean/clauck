@@ -35,7 +35,7 @@ Post a daily verification message via one of your configured MCPs.
 - **Discord DM:** use the Discord MCP.
 - **Jira ticket:** append a comment to `<TODO: ticket key>`.
 - **Email:** use the Gmail MCP to send to yourself with subject `clauck daily-verify`.
-- **Local file only:** append to `~/.claude/scheduled-jobs/daily-verify-feed.md`. No MCP needed; you lose external visibility but removes the MCP-surface cost floor (drops to ~$0.04 like heartbeat).
+- **Local file only:** append to `~/.clauck/daily-verify-feed.md`. No MCP needed; you lose external visibility but removes the MCP-surface cost floor (drops to ~$0.04 like heartbeat).
 
 **Post body (one line per bullet, no preamble, no trailing text):**
 

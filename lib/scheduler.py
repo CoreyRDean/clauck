@@ -3,7 +3,7 @@
 scheduler.py — auto-discover scheduled-job prompts and fire due ones.
 
 Runs once per minute under a launchd LaunchAgent. On each tick:
-  1. Scans ~/.claude/scheduled-jobs/*.md for job prompts.
+  1. Scans ~/.clauck/*.md for job prompts.
   2. Parses YAML frontmatter from each: cron, max_turns, max_budget_usd,
      cwd, effort, name, description, semantic_hooks.
   3. Writes a manifest.json listing all discovered jobs (for agent
@@ -30,9 +30,9 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 HOME = Path(os.environ.get("HOME", str(Path.home())))
-JOBS_DIR = HOME / ".claude" / "scheduled-jobs"
+JOBS_DIR = HOME / ".clauck"
 STATE_DIR = JOBS_DIR / ".state"
-GLOBAL_PROMPT = HOME / ".claude" / "scheduled-jobs-prompt.md"
+GLOBAL_PROMPT = JOBS_DIR / "prompt.md"
 MANIFEST_PATH = JOBS_DIR / ".manifest.json"
 RUN_JOB = JOBS_DIR / "run-job.sh"
 DAG_RUNNER = JOBS_DIR / "dag-runner.py"
@@ -832,7 +832,7 @@ def fire_dag(job: dict, trigger: str = "scheduled") -> None:
 
 
 def load_config() -> dict:
-    """Read ~/.claude/scheduled-jobs/.clauck.config.json.
+    """Read ~/.clauck/.clauck.config.json.
 
     Returns defaults (auto-check enabled, hourly, no auto-apply) if the file
     is absent or unparseable. The installer ships a default config file so

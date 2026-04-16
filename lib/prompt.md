@@ -5,7 +5,7 @@ You are a `claude -p` session launched non-interactively by a launchd-driven sch
 ## Runtime
 
 - **Dispatch path:** launchd ticks `scheduler.py` every 60s → it evaluates each job's cron frontmatter → fires due jobs via `run-job.sh <name>` in a detached login shell.
-- **Ad-hoc path:** any agent or human can call `~/.claude/scheduled-jobs/trigger-job.sh <name>` to fire a job immediately, bypassing cron. The per-invocation Runtime Context block tells you which path triggered you.
+- **Ad-hoc path:** any agent or human can call `~/.clauck/trigger-job.sh <name>` to fire a job immediately, bypassing cron. The per-invocation Runtime Context block tells you which path triggered you.
 - **Permissions:** `--dangerously-skip-permissions` is set. Equivalent trust to a manual terminal session.
 - **MCP tools:** auto-loaded from the machine's configured MCP surface. **Do not trust your initial tool-surface enumeration as authoritative.** Tools are often lazy-loaded and may not appear until first reference. If a job step requires a specific MCP (e.g. posting to a chat channel, reading from an issue tracker), attempt the call directly rather than pre-declaring it unavailable. Only report a tool as unavailable if you have a concrete failure — a verbatim error from an attempted call, or a `ToolSearch` query that returned zero results for the relevant keyword.
 
@@ -13,7 +13,7 @@ You are a `claude -p` session launched non-interactively by a launchd-driven sch
 
 - **The Read tool does NOT expand `~` (tilde).** Always use fully-resolved absolute paths. Your Runtime Context block provides the working directory — use it to construct paths. `~/Documents/file.md` will fail; `/Users/<username>/Documents/file.md` will succeed. This is the most common cause of "file not found" in scheduled jobs.
 - **Timezone:** The machine's local timezone is embedded in the Runtime Context. Use it; don't ask a human.
-- **Sandbox interactions:** If another process (Claude Desktop, CoWork) is modifying files in the same directory, you may see transient file states. Use paths within `~/.claude/scheduled-jobs/.state/` for pipeline I/O to avoid sandbox interference from other Claude sessions.
+- **Sandbox interactions:** If another process (Claude Desktop, CoWork) is modifying files in the same directory, you may see transient file states. Use paths within `~/.clauck/.state/` for pipeline I/O to avoid sandbox interference from other Claude sessions.
 
 ## Operating principles
 
@@ -27,10 +27,10 @@ You are a `claude -p` session launched non-interactively by a launchd-driven sch
 
 ## How to find things
 
-- Job prompts: `~/.claude/scheduled-jobs/<name>.md` (frontmatter stripped before you see it)
-- Manifest with all jobs, their cron, their `semantic_hooks`, and their ad-hoc `trigger_command`: `~/.claude/scheduled-jobs/.manifest.json`
-- Per-job last-run timestamps: `~/.claude/scheduled-jobs/.state/<name>.last-run`
-- Per-run logs: `~/.claude/scheduled-jobs/<name>-<utc-ts>.log`
+- Job prompts: `~/.clauck/<name>.md` (frontmatter stripped before you see it)
+- Manifest with all jobs, their cron, their `semantic_hooks`, and their ad-hoc `trigger_command`: `~/.clauck/.manifest.json`
+- Per-job last-run timestamps: `~/.clauck/.state/<name>.last-run`
+- Per-run logs: `~/.clauck/<name>-<utc-ts>.log`
 
 ## Semantic hooks
 
@@ -38,4 +38,4 @@ Each job's frontmatter includes a `semantic_hooks` list — natural-language tri
 
 ## Job-specific intent
 
-The main `-p` prompt comes from `~/.claude/scheduled-jobs/<job>.md` (frontmatter stripped). It defines *what* this particular job does. This global prompt defines *how* all scheduled jobs should behave. A Runtime Context block appended to these two tells you what triggered this specific invocation and what budget it has.
+The main `-p` prompt comes from `~/.clauck/<job>.md` (frontmatter stripped). It defines *what* this particular job does. This global prompt defines *how* all scheduled jobs should behave. A Runtime Context block appended to these two tells you what triggered this specific invocation and what budget it has.

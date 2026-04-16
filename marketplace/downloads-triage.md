@@ -35,7 +35,7 @@ List files added to ~/Downloads in the last 30 minutes that you haven't already 
 2. Make a one-line guess at what it is (screenshot, installer, PDF paper, media, etc.) based on the name and extension alone. Do not open the file.
 3. Optionally suggest a destination folder if the category is obvious (e.g. images → ~/Pictures, installers → /Applications after install, academic PDFs → ~/Documents/papers).
 
-Append your report to ~/.claude/scheduled-jobs/downloads-triage-feed.md in this format:
+Append your report to ~/.clauck/downloads-triage-feed.md in this format:
 
 ```
 ## <ISO8601 UTC>

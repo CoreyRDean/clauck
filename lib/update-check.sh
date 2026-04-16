@@ -10,7 +10,7 @@
 # repo. A push to main does NOT trigger an update — someone has to explicitly cut
 # a Release for downstream machines to see the new version.
 #
-# Config file (JSON) at: ~/.claude/scheduled-jobs/.clauck.config.json
+# Config file (JSON) at: ~/.clauck/.clauck.config.json
 #   {
 #     "auto_update": {
 #       "enabled": true,                   # auto-check enabled
@@ -35,7 +35,7 @@ set -euo pipefail
 # Env var override takes precedence for ad-hoc testing.
 _CONFIG_REPO=""
 _CONFIG_CHANNEL=""
-_CFG="$HOME/.claude/scheduled-jobs/.clauck.config.json"
+_CFG="$HOME/.clauck/.clauck.config.json"
 if [ -f "$_CFG" ]; then
     _CONFIG_REPO=$(/usr/bin/python3 -c "
 import json, sys
@@ -55,11 +55,11 @@ REPO="${CLAUCK_REPO:-${_CONFIG_REPO:-CoreyRDean/clauck}}"
 # skip update checks entirely.
 CHANNEL="${CLAUCK_CHANNEL:-${_CONFIG_CHANNEL:-stable}}"
 
-STATE_DIR="$HOME/.claude/scheduled-jobs/.state"
-VERSION_FILE="$HOME/.claude/scheduled-jobs/.version"
+STATE_DIR="$HOME/.clauck/.state"
+VERSION_FILE="$HOME/.clauck/.version"
 AVAILABLE_FILE="$STATE_DIR/.update-available"
 LAST_CHECK_FILE="$STATE_DIR/.update-last-check"
-CONFIG_FILE="$HOME/.claude/scheduled-jobs/.clauck.config.json"
+CONFIG_FILE="$HOME/.clauck/.clauck.config.json"
 
 APPLY=0
 QUIET=0
@@ -93,8 +93,8 @@ done
 log() { [ "$QUIET" -eq 0 ] && printf "%s\n" "$*"; }
 err() { printf "%s\n" "$*" >&2; }
 
-[ -d "$HOME/.claude/scheduled-jobs" ] \
-    || { err "clauck is not installed at ~/.claude/scheduled-jobs"; exit 2; }
+[ -d "$HOME/.clauck" ] \
+    || { err "clauck is not installed at ~/.clauck"; exit 2; }
 mkdir -p "$STATE_DIR"
 
 # ──────────────────────────────────────────────────────────────────────────

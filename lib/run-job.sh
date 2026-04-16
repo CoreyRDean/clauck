@@ -3,7 +3,7 @@
 #
 # Normally invoked by scheduler.py with config pre-resolved into env vars:
 #   CLAUDE_JOB_NAME           (required)
-#   CLAUDE_JOB_PATH           (prompt .md path; default ~/.claude/scheduled-jobs/<name>.md)
+#   CLAUDE_JOB_PATH           (prompt .md path; default ~/.clauck/<name>.md)
 #   CLAUDE_JOB_CWD            (working directory; default $HOME)
 #   CLAUDE_JOB_MAX_TURNS      (default 50)
 #   CLAUDE_JOB_MAX_BUDGET_USD (default 2.00)
@@ -38,9 +38,9 @@ if [ -z "$JOB_NAME" ]; then
   exit 2
 fi
 
-JOBS_DIR="$HOME/.claude/scheduled-jobs"
+JOBS_DIR="$HOME/.clauck"
 PROMPT_FILE="${CLAUDE_JOB_PATH:-$JOBS_DIR/${JOB_NAME}.md}"
-GLOBAL_PROMPT="$HOME/.claude/scheduled-jobs-prompt.md"
+GLOBAL_PROMPT="$HOME/.clauck/prompt.md"
 JOB_CWD="${CLAUDE_JOB_CWD:-$HOME}"
 MAX_TURNS="${CLAUDE_JOB_MAX_TURNS:-50}"
 MAX_BUDGET_USD="${CLAUDE_JOB_MAX_BUDGET_USD:-2.00}"

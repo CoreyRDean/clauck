@@ -2,7 +2,7 @@
 # trigger-job.sh — ad-hoc fire a scheduled job by name, bypassing cron.
 #
 # Intended for agent nodes that matched a semantic hook (see
-# ~/.claude/scheduled-jobs/.manifest.json) and want to execute the
+# ~/.clauck/.manifest.json) and want to execute the
 # corresponding job now. Also fine for manual human invocation.
 #
 # Usage:
@@ -34,4 +34,4 @@ for arg in "$@"; do
   esac
 done
 
-exec /usr/bin/python3 "$HOME/.claude/scheduled-jobs/scheduler.py" --trigger "$NAME"
+exec /usr/bin/python3 "$HOME/.clauck/scheduler.py" --trigger "$NAME"

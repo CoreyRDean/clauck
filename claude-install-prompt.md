@@ -26,8 +26,8 @@ and report cleanly.
    - If it's a preflight failure (missing `claude` CLI, missing python3),
      tell the user exactly what to install and stop.
    - If it's the verification step (`exit_code=3`), the files are placed but
-     the heartbeat didn't complete. Tail `~/.claude/scheduled-jobs/heartbeat-*.log`
-     and `~/.claude/scheduled-jobs/.scheduler-stderr.log`, explain the root
+     the heartbeat didn't complete. Tail `~/.clauck/heartbeat-*.log`
+     and `~/.clauck/.scheduler-stderr.log`, explain the root
      cause, and recommend a fix.
 
 4. After success, ask the user one question: **"What would you like to

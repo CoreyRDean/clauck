@@ -33,7 +33,7 @@ Scan `~/Desktop` and `~/Documents` (top-level only, not recursive) for:
 2. **Generic names** — files matching patterns like `Screenshot*`, `Untitled*`, `New Document*`, `Screen Recording*`, `IMG_*`, `image*`.
 3. **Large files** — anything over 100MB. Use `stat -f '%z %N'` to get size.
 
-Write the report to `~/.claude/scheduled-jobs/workspace-cleanup-feed.md`, appending:
+Write the report to `~/.clauck/workspace-cleanup-feed.md`, appending:
 
 ```
 ## <ISO8601 UTC>

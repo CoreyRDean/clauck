@@ -17,11 +17,11 @@ What should have happened instead.
 **Environment**
 - macOS version: (`sw_vers -productVersion`)
 - Claude CLI version: (`claude --version`)
-- clauck version: (`cat ~/.claude/scheduled-jobs/.version`)
+- clauck version: (`cat ~/.clauck/.version`)
 - Python version: (`/usr/bin/python3 --version`)
 
 **Relevant logs** (if applicable)
 ```
-Paste the relevant section from ~/.claude/scheduled-jobs/<name>-<ts>.log
-or ~/.claude/scheduled-jobs/.scheduler-stderr.log
+Paste the relevant section from ~/.clauck/<name>-<ts>.log
+or ~/.clauck/.scheduler-stderr.log
 ```

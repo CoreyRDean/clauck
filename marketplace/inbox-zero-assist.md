@@ -33,7 +33,7 @@ Search Gmail for unread threads older than 48 hours. For each (cap at 15):
 1. Note: sender, subject, age, snippet.
 2. Suggest ONE action: `reply` (draft a one-liner), `archive` (not actionable), `delegate` (forward to someone), `schedule` (needs attention but not now).
 
-Append to `~/.claude/scheduled-jobs/inbox-assist-feed.md`:
+Append to `~/.clauck/inbox-assist-feed.md`:
 
 ```
 ## <ISO8601 UTC>

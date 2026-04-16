@@ -33,7 +33,7 @@ For each repo, run:
 1. `git -C <repo> status --porcelain` — any output means uncommitted changes.
 2. `git -C <repo> log @{u}.. --oneline 2>/dev/null` — any output means unpushed commits. If no upstream is set, skip this check.
 
-Collect results. If ANY repo has uncommitted or unpushed work, append to `~/.claude/scheduled-jobs/git-nudge-feed.md`:
+Collect results. If ANY repo has uncommitted or unpushed work, append to `~/.clauck/git-nudge-feed.md`:
 
 ```
 ## <ISO8601 UTC>

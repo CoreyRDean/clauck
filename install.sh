@@ -199,9 +199,9 @@ preflight() {
 make_dirs() {
     section "Creating directory layout"
     local dirs=(
+        "$HOME/.clauck"
+        "$HOME/.clauck/.state"
         "$HOME/.claude"
-        "$HOME/.claude/scheduled-jobs"
-        "$HOME/.claude/scheduled-jobs/.state"
         "$HOME/.claude/skills/clauck"
         "$HOME/.claude/hooks"
         "$HOME/Library/LaunchAgents"
@@ -214,6 +214,78 @@ make_dirs() {
             mkdir -p "$d" && ok "created: $d"
         fi
     done
+}
+
+# ──────────────────────────────────────────────────────────────────────────
+# Legacy migration: ~/.claude/scheduled-jobs → ~/.clauck
+# ──────────────────────────────────────────────────────────────────────────
+
+migrate_legacy() {
+    local legacy="$HOME/.claude/scheduled-jobs"
+    local target="$HOME/.clauck"
+
+    # Only migrate if the legacy directory exists and the new one doesn't
+    # have a version file yet (avoids re-migrating on idempotent re-runs).
+    [ -d "$legacy" ] || return 0
+    [ -f "$target/.version" ] && return 0
+
+    section "Migrating from ~/.claude/scheduled-jobs → ~/.clauck"
+
+    # User job files (flat .md)
+    for f in "$legacy"/*.md; do
+        [ -f "$f" ] || continue
+        local name; name="$(basename "$f")"
+        cp -p "$f" "$target/$name" && ok "migrated job: $name"
+    done
+
+    # Module job directories (contain JOB.md)
+    for d in "$legacy"/*/; do
+        [ -d "$d" ] || continue
+        local name; name="$(basename "$d")"
+        # Skip hidden dirs (.state, etc.)
+        case "$name" in .*) continue ;; esac
+        [ -f "$d/JOB.md" ] || continue
+        cp -rp "$d" "$target/$name" && ok "migrated module: $name/"
+    done
+
+    # State directory
+    [ -d "$legacy/.state" ] && cp -rp "$legacy/.state" "$target/.state" && ok "migrated .state/"
+
+    # Config + metadata files
+    local meta
+    for meta in .clauck.config.json .version .build-source; do
+        [ -f "$legacy/$meta" ] && cp -p "$legacy/$meta" "$target/$meta"
+    done
+
+    # Job logs
+    for f in "$legacy"/*-[0-9]*.log; do
+        [ -f "$f" ] || continue
+        cp -p "$f" "$target/$(basename "$f")"
+    done
+
+    # Global prompt (was at a separate path)
+    [ -f "$HOME/.claude/scheduled-jobs-prompt.md" ] && \
+        cp -p "$HOME/.claude/scheduled-jobs-prompt.md" "$target/prompt.md"
+
+    # Scheduler logs
+    for f in "$legacy"/.scheduler-*.log; do
+        [ -f "$f" ] || continue
+        cp -p "$f" "$target/$(basename "$f")"
+    done
+
+    # Leave breadcrumb
+    cat > "$legacy/MIGRATED.md" <<MIGEOF
+# clauck has moved
+
+All clauck data has been migrated to \`~/.clauck/\`.
+
+This directory is no longer used. You can safely delete it:
+
+    rm -rf ~/.claude/scheduled-jobs
+
+Migration date: $(date -u +%Y-%m-%dT%H:%M:%SZ)
+MIGEOF
+    ok "migration complete — legacy data preserved with breadcrumb"
 }
 
 # ──────────────────────────────────────────────────────────────────────────
@@ -233,21 +305,21 @@ install_files() {
         ok "installed: $dst"
     }
 
-    install_file "$repo/lib/scheduler.py"             "$HOME/.claude/scheduled-jobs/scheduler.py"   755
-    install_file "$repo/lib/run-job.sh"               "$HOME/.claude/scheduled-jobs/run-job.sh"     755
-    install_file "$repo/lib/trigger-job.sh"           "$HOME/.claude/scheduled-jobs/trigger-job.sh" 755
-    install_file "$repo/lib/update-check.sh"          "$HOME/.claude/scheduled-jobs/update-check.sh" 755
+    install_file "$repo/lib/scheduler.py"             "$HOME/.clauck/scheduler.py"   755
+    install_file "$repo/lib/run-job.sh"               "$HOME/.clauck/run-job.sh"     755
+    install_file "$repo/lib/trigger-job.sh"           "$HOME/.clauck/trigger-job.sh" 755
+    install_file "$repo/lib/update-check.sh"          "$HOME/.clauck/update-check.sh" 755
 
     # Install the clauck CLI to ~/.local/bin (same location as claude CLI).
     run mkdir -p "$HOME/.local/bin"
     install_file "$repo/lib/clauck"                   "$HOME/.local/bin/clauck"                     755
-    install_file "$repo/lib/dag-runner.py"              "$HOME/.claude/scheduled-jobs/dag-runner.py"  755
-    install_file "$repo/lib/scheduled-jobs-prompt.md" "$HOME/.claude/scheduled-jobs-prompt.md"      644
+    install_file "$repo/lib/dag-runner.py"            "$HOME/.clauck/dag-runner.py"  755
+    install_file "$repo/lib/prompt.md"                "$HOME/.clauck/prompt.md"      644
     install_file "$repo/lib/scheduled-jobs-notice.sh" "$HOME/.claude/hooks/scheduled-jobs-notice.sh" 755
     # Ship uninstall.sh alongside the runtime so `clauck uninstall` always has
     # a local, version-matched copy to invoke. Running the remote latest
     # against an older local install can leave orphaned files behind.
-    install_file "$repo/uninstall.sh"                 "$HOME/.claude/scheduled-jobs/uninstall.sh"   755
+    install_file "$repo/uninstall.sh"                 "$HOME/.clauck/uninstall.sh"   755
 
     # Record the installed version for the auto-updater.
     #
@@ -268,7 +340,7 @@ install_files() {
     fi
     if [ -n "$recorded_version" ]; then
         if [ "$DRY_RUN" -eq 0 ]; then
-            printf '%s\n' "$recorded_version" > "$HOME/.claude/scheduled-jobs/.version"
+            printf '%s\n' "$recorded_version" > "$HOME/.clauck/.version"
         fi
         ok "recorded version: $recorded_version"
     fi
@@ -309,7 +381,7 @@ install_files() {
         esac
     fi
 
-    local bs_dst="$HOME/.claude/scheduled-jobs/.build-source"
+    local bs_dst="$HOME/.clauck/.build-source"
     if [ "$DRY_RUN" -eq 0 ]; then
         local bs_ts
         bs_ts="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
@@ -328,7 +400,7 @@ BSEOF
 
     # Write config: respect auto-update prompt decision + persist fork URL.
     # Never overwrite an existing config — user preferences are sacrosanct.
-    local cfg_dst="$HOME/.claude/scheduled-jobs/.clauck.config.json"
+    local cfg_dst="$HOME/.clauck/.clauck.config.json"
     if [ -f "$cfg_dst" ]; then
         ok "preserving existing config: $cfg_dst"
     else
@@ -373,7 +445,7 @@ CFGEOF
     for job in "$repo/jobs/"*.md; do
         [ -f "$job" ] || continue
         local name; name="$(basename "$job")"
-        local dst="$HOME/.claude/scheduled-jobs/$name"
+        local dst="$HOME/.clauck/$name"
         if [ ! -f "$dst" ]; then
             install_file "$job" "$dst" 644
             continue
@@ -479,12 +551,12 @@ EOF
 verify() {
     section "Verifying pipeline (firing heartbeat ad-hoc)"
 
-    local trigger="$HOME/.claude/scheduled-jobs/trigger-job.sh"
+    local trigger="$HOME/.clauck/trigger-job.sh"
     [ -x "$trigger" ] || die "trigger-job.sh not executable at $trigger" 3
 
     # Snapshot existing logs so we can detect a new one.
     local before_count
-    before_count=$(ls "$HOME/.claude/scheduled-jobs/"heartbeat-*.log 2>/dev/null | wc -l | tr -d ' ')
+    before_count=$(ls "$HOME/.clauck/"heartbeat-*.log 2>/dev/null | wc -l | tr -d ' ')
 
     "$trigger" heartbeat >/dev/null 2>&1 \
         || die "trigger-job.sh heartbeat failed to dispatch" 3
@@ -494,10 +566,10 @@ verify() {
     while [ "$elapsed" -lt "$max" ]; do
         sleep "$interval"
         elapsed=$((elapsed + interval))
-        latest=$(ls -t "$HOME/.claude/scheduled-jobs/"heartbeat-*.log 2>/dev/null | head -1 || true)
+        latest=$(ls -t "$HOME/.clauck/"heartbeat-*.log 2>/dev/null | head -1 || true)
         if [ -n "$latest" ]; then
             local current_count
-            current_count=$(ls "$HOME/.claude/scheduled-jobs/"heartbeat-*.log 2>/dev/null | wc -l | tr -d ' ')
+            current_count=$(ls "$HOME/.clauck/"heartbeat-*.log 2>/dev/null | wc -l | tr -d ' ')
             if [ "$current_count" -gt "$before_count" ] && grep -q "exit_code=" "$latest"; then
                 break
             fi
@@ -507,7 +579,7 @@ verify() {
     if [ -z "$latest" ] || ! grep -q "exit_code=" "$latest"; then
         fail "heartbeat did not complete within ${max}s"
         fail "check: $latest"
-        fail "check: $HOME/.claude/scheduled-jobs/.scheduler-stderr.log"
+        fail "check: $HOME/.clauck/.scheduler-stderr.log"
         die "verification failed" 3
     fi
 
@@ -541,13 +613,13 @@ ${C_BOLD}═══════════════════════�
 ${C_OK}${C_BOLD}✓ clauck installed and verified${C_RESET}
 ${C_BOLD}═══════════════════════════════════════════════════════════════${C_RESET}
 
-  Version         $(cat "$HOME/.claude/scheduled-jobs/.version" 2>/dev/null | tr -d '[:space:]' || echo unknown)
+  Version         $(cat "$HOME/.clauck/.version" 2>/dev/null | tr -d '[:space:]' || echo unknown)
   Scheduler       com.$USER.claude-scheduler (loaded, tick interval 60s)
-  Jobs directory  ~/.claude/scheduled-jobs/
+  Jobs directory  ~/.clauck/
   Skill           ~/.claude/skills/clauck/SKILL.md
   Marketplace     ~/.claude/skills/clauck/marketplace/
   Hook            ~/.claude/hooks/scheduled-jobs-notice.sh
-  Config          ~/.claude/scheduled-jobs/.clauck.config.json
+  Config          ~/.clauck/.clauck.config.json
 
 ${C_BOLD}Default job installed:${C_RESET}
   heartbeat (hourly liveness check, ~\$1/month at current Haiku pricing)
@@ -555,7 +627,7 @@ ${C_BOLD}Default job installed:${C_RESET}
 ${C_BOLD}Auto-updates:${C_RESET}
   Checking GitHub Releases every hour. Detects new versions; does NOT apply
   them automatically (security-conscious default). To change, edit the config
-  file above or run: ${C_BOLD}~/.claude/scheduled-jobs/update-check.sh --help${C_RESET}
+  file above or run: ${C_BOLD}~/.clauck/update-check.sh --help${C_RESET}
 
 ${C_BOLD}What just happened:${C_RESET}
   Your Claude CLI was just launched by a launchd-spawned shell, loaded its
@@ -588,7 +660,7 @@ ${C_BOLD}Get started (through the clauck CLI):${C_RESET}
 
   ${C_DIM}To uninstall:${C_RESET}
   ${C_BOLD}clauck uninstall${C_RESET}                     ${C_DIM}# preserves jobs, state, and logs${C_RESET}
-  ${C_BOLD}clauck uninstall --wipe${C_RESET}              ${C_DIM}# also removes ~/.claude/scheduled-jobs${C_RESET}
+  ${C_BOLD}clauck uninstall --wipe${C_RESET}              ${C_DIM}# also removes ~/.clauck${C_RESET}
 
 ${C_DIM}Full docs: ~/.claude/skills/clauck/SKILL.md${C_RESET}
 
@@ -629,15 +701,21 @@ confirm_plan() {
     local version=""
     [ -f "$repo/VERSION" ] && version=" ($(cat "$repo/VERSION" | tr -d '[:space:]'))"
 
+    local legacy_note=""
+    if [ -d "$HOME/.claude/scheduled-jobs" ] && [ ! -f "$HOME/.clauck/.version" ]; then
+        legacy_note="
+  ${C_BOLD}${C_WARN}migrate${C_RESET}  Migrate jobs, state, and logs from ~/.claude/scheduled-jobs → ~/.clauck"
+    fi
+
     cat <<EOF
 
 ${C_BOLD}This installer will:${C_RESET}
-  ${C_DIM}core${C_RESET}  Place scheduler + executor scripts in ~/.claude/scheduled-jobs/
+  ${C_DIM}core${C_RESET}  Place scheduler + executor scripts in ~/.clauck/
   ${C_DIM}core${C_RESET}  Register a LaunchAgent (com.$USER.claude-scheduler, ticks every 60s)
   ${C_DIM}opt ${C_RESET}  Install a Claude Code skill at ~/.claude/skills/clauck/
   ${C_DIM}opt ${C_RESET}  Install a pre-made job marketplace at ~/.claude/skills/clauck/marketplace/
   ${C_DIM}opt ${C_RESET}  Register a SessionStart hook in ~/.claude/settings.json
-  ${C_DIM}opt ${C_RESET}  Install the 'heartbeat' job (~\$1/month on Haiku)
+  ${C_DIM}opt ${C_RESET}  Install the 'heartbeat' job (~\$1/month on Haiku)${legacy_note}
 
   Source: ${REPO_URL}${version}
 
@@ -694,6 +772,7 @@ main() {
     prompt_auto_update
 
     make_dirs
+    migrate_legacy
     install_files "$repo" "$install_source"
     install_plist "$repo"
     patch_settings

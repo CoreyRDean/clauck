@@ -39,7 +39,7 @@ If you're running in a non-CLI harness: be upfront with the user about what you 
 
 ```
 launchd (60s tick) → scheduler.py
-  ├─ discovers ~/.claude/scheduled-jobs/*.md
+  ├─ discovers ~/.clauck/*.md
   ├─ parses YAML frontmatter (cron, triggers, hooks, budgets, tags, producers, consumers)
   ├─ writes .manifest.json (with cycle detection for producer graphs)
   ├─ evaluates external_triggers (file_added, file_changed, process_starts, command_succeeds)
@@ -73,21 +73,21 @@ launchd (60s tick) → scheduler.py
 
 | What | Where |
 |---|---|
-| Runtime | `~/.claude/scheduled-jobs/{scheduler.py,run-job.sh,trigger-job.sh,update-check.sh,dag-runner.py}` |
-| Jobs | `~/.claude/scheduled-jobs/*.md` |
-| Logs | `~/.claude/scheduled-jobs/<name>-<ts>-<pid>.log` |
-| DAG logs | `~/.claude/scheduled-jobs/<root>-dag-<ts>-<pid>.log` |
-| Manifest | `~/.claude/scheduled-jobs/.manifest.json` |
-| State | `~/.claude/scheduled-jobs/.state/` |
-| Config | `~/.claude/scheduled-jobs/.clauck.config.json` |
-| Version | `~/.claude/scheduled-jobs/.version` |
-| Build source | `~/.claude/scheduled-jobs/.build-source` (channel, source, git SHA) |
+| Runtime | `~/.clauck/{scheduler.py,run-job.sh,trigger-job.sh,update-check.sh,dag-runner.py}` |
+| Jobs | `~/.clauck/*.md` |
+| Logs | `~/.clauck/<name>-<ts>-<pid>.log` |
+| DAG logs | `~/.clauck/<root>-dag-<ts>-<pid>.log` |
+| Manifest | `~/.clauck/.manifest.json` |
+| State | `~/.clauck/.state/` |
+| Config | `~/.clauck/.clauck.config.json` |
+| Version | `~/.clauck/.version` |
+| Build source | `~/.clauck/.build-source` (channel, source, git SHA) |
 | Skill | `~/.claude/skills/clauck/SKILL.md` |
 | Marketplace | `~/.claude/skills/clauck/marketplace/` |
 | Hook | `~/.claude/hooks/scheduled-jobs-notice.sh` |
 | CLI | `~/.local/bin/clauck` |
 | LaunchAgent | `~/Library/LaunchAgents/com.$USER.claude-scheduler.plist` |
-| Global prompt | `~/.claude/scheduled-jobs-prompt.md` |
+| Global prompt | `~/.clauck/prompt.md` |
 
 ### Frontmatter schema (complete)
 

@@ -9,7 +9,7 @@
     <array>
         <string>/bin/zsh</string>
         <string>-lc</string>
-        <string>/usr/bin/python3 "$HOME/.claude/scheduled-jobs/scheduler.py"</string>
+        <string>/usr/bin/python3 "$HOME/.clauck/scheduler.py"</string>
     </array>
 
     <key>StartInterval</key>
@@ -22,10 +22,10 @@
     <string>Background</string>
 
     <key>StandardOutPath</key>
-    <string>__HOME__/.claude/scheduled-jobs/.scheduler-stdout.log</string>
+    <string>__HOME__/.clauck/.scheduler-stdout.log</string>
 
     <key>StandardErrorPath</key>
-    <string>__HOME__/.claude/scheduled-jobs/.scheduler-stderr.log</string>
+    <string>__HOME__/.clauck/.scheduler-stderr.log</string>
 
     <key>EnvironmentVariables</key>
     <dict>

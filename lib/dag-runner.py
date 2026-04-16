@@ -30,7 +30,7 @@ from pathlib import Path
 # ---------- paths (mirrors scheduler.py) ----------
 
 HOME = Path(os.environ.get("HOME", str(Path.home())))
-JOBS_DIR = HOME / ".claude" / "scheduled-jobs"
+JOBS_DIR = HOME / ".clauck"
 STATE_DIR = JOBS_DIR / ".state"
 MANIFEST_PATH = JOBS_DIR / ".manifest.json"
 RUN_JOB = JOBS_DIR / "run-job.sh"

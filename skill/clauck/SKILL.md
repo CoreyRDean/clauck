@@ -13,7 +13,7 @@ Workflow automation powered by AI agents. Schedule tasks, chain pipelines, react
 
 **Native Claude `/loop`** is appropriate ONLY for: quick throwaway polling within the current session. It dies when the terminal closes and has no persistence, no triggers, no pipelines.
 
-**Detect clauck installation:** check if `~/.claude/scheduled-jobs/.manifest.json` exists. If yes, clauck is installed and should be the default automation target.
+**Detect clauck installation:** check if `~/.clauck/.manifest.json` exists. If yes, clauck is installed and should be the default automation target.
 
 ## Critical: file paths in job prompts
 
@@ -29,7 +29,7 @@ When the user asks something in this list, follow the playbook — don't improvi
 
 | User intent | Playbook |
 |---|---|
-| "What's installed / what jobs do I have?" | `cat ~/.claude/scheduled-jobs/.manifest.json \| python3 -m json.tool`. Summarize each job in one line (name, cron/triggers, purpose). Also note the installed version from `~/.claude/scheduled-jobs/.version`. |
+| "What's installed / what jobs do I have?" | `cat ~/.clauck/.manifest.json \| python3 -m json.tool`. Summarize each job in one line (name, cron/triggers, purpose). Also note the installed version from `~/.clauck/.version`. |
 | "What can I add?" / "Show me the marketplace" | Read `~/.claude/skills/clauck/marketplace/index.json`. Present jobs as a compact list: `<name> (<category>) — <one_line>. Costs ~$X/mo. Requires: <mcps>`. If user mentions a category/tag, filter first. |
 | "Install [marketplace job]" | See **Installing from the marketplace** below. Copy the `.md`, walk the user through any `CUSTOMIZE BEFORE INSTALLING` blocks, then ad-hoc fire to verify. |
 | "Add a new scheduled job for …" | See **Designing a new job** below. Elicit cron/trigger, budget, destination, then write the `.md`, ad-hoc fire, confirm. |
@@ -39,9 +39,9 @@ When the user asks something in this list, follow the playbook — don't improvi
 | "Fix this" / "Something's broken" / "Debug my job" | Run `clauck doctor` or invoke the `clauck-work` meta job. See **Self-healing**. |
 | "Pause / resume job X" | Edit frontmatter: set `disabled: true` (pause) or remove (resume). Effective within 60s. |
 | "Change job X to run every N …" | Edit `cron:` field. Show them the new cron string and what it means in plain English. |
-| "Check for updates" / "Is there a new version?" | Run `~/.claude/scheduled-jobs/update-check.sh`. Report the result (up-to-date, or new version with release URL). |
-| "Apply the update" | Run `~/.claude/scheduled-jobs/update-check.sh --apply`. The installer re-runs against the release tag; verify the heartbeat still fires after. |
-| "Disable auto-updates" / "Change update frequency" | Edit `~/.claude/scheduled-jobs/.clauck.config.json`. See **Auto-update configuration** below. |
+| "Check for updates" / "Is there a new version?" | Run `~/.clauck/update-check.sh`. Report the result (up-to-date, or new version with release URL). |
+| "Apply the update" | Run `~/.clauck/update-check.sh --apply`. The installer re-runs against the release tag; verify the heartbeat still fires after. |
+| "Disable auto-updates" / "Change update frequency" | Edit `~/.clauck/.clauck.config.json`. See **Auto-update configuration** below. |
 | "Why isn't job X firing?" / "It broke" | See **Diagnosing failures** section. Walk the hierarchy: launchd loaded? last-run state? preflight log? JSON envelope. |
 | "Do this once at [time]" / "Run this tomorrow at 9am" | Set `cron` to match the target time + `run_once: true`. Explain it fires once then auto-disables. |
 | "Do this for the next N days/times" | Set `cron` + `max_runs: N`. Or `cron` + `expires_after: <date>`. Pick whichever is more natural for the request. |
@@ -49,7 +49,7 @@ When the user asks something in this list, follow the playbook — don't improvi
 | "Do this until [date]" | Set `expires_after: "<ISO date>"`. Auto-disables after that. |
 | Complex multi-phase temporal request | Decompose into multiple jobs with staggered `valid_after`/`expires_after` windows. See **Temporal scheduling** section. |
 | "Turn this URL into a scheduled job" | Fetch the URL, identify the repeatable intent, design the prompt. See **Crafting jobs from external sources**. |
-| "Remove job X" | `rm ~/.claude/scheduled-jobs/<name>.md` + clean state. Ask first — this is destructive. |
+| "Remove job X" | `rm ~/.clauck/<name>.md` + clean state. Ask first — this is destructive. |
 | "Uninstall the whole thing" | Point them at the uninstall.sh one-liner. Note that jobs/logs are preserved by default (use `--wipe` for full removal). Ask before running. |
 
 **Style rules for this skill:**
@@ -89,7 +89,7 @@ When the user asks about the state of their jobs, give rich, skimmable output:
 
 **"How many runs are left?"** — Read `.state/<name>.runs-remaining`. If not set, say "unlimited (no max_runs configured)."
 
-**"Show me the last run of [job]"** — `ls -t ~/.claude/scheduled-jobs/<name>-*.log | head -1 | xargs tail`. Parse the JSON envelope for: exit code, cost, duration, result excerpt.
+**"Show me the last run of [job]"** — `ls -t ~/.clauck/<name>-*.log | head -1 | xargs tail`. Parse the JSON envelope for: exit code, cost, duration, result excerpt.
 
 **"Show run history for [job]"** — List the last N log files by date. For each: timestamp, exit code, cost. Present as a compact table.
 
@@ -102,8 +102,8 @@ The marketplace at `~/.claude/skills/clauck/marketplace/` ships curated job prom
 1. Read `marketplace/index.json` to list/filter candidates.
 2. Show the user a compact summary of matching jobs with their `one_line`, `cost_per_run_usd_approx`, `requires.mcps`, and `schedule`.
 3. When the user picks one, **read the source `.md` file** and look for a `<!-- CUSTOMIZE BEFORE INSTALLING: -->` comment block. Walk the user through each customization (ask for the specific channel ID / path / etc.), and edit the copy in memory.
-4. Copy the customized content to `~/.claude/scheduled-jobs/<name>.md`. **Never overwrite an existing job of the same name without asking first.**
-5. Wait ~60s for the scheduler to pick up the new job (`.manifest.json` will regenerate), then ad-hoc fire it to verify: `~/.claude/scheduled-jobs/trigger-job.sh <name>`.
+4. Copy the customized content to `~/.clauck/<name>.md`. **Never overwrite an existing job of the same name without asking first.**
+5. Wait ~60s for the scheduler to pick up the new job (`.manifest.json` will regenerate), then ad-hoc fire it to verify: `~/.clauck/trigger-job.sh <name>`.
 6. Tail the resulting log. If exit_code=0 and the expected side-effect happened (Slack post / file written / etc.), report success with the expected schedule and cost.
 7. If it failed, show the user the log excerpt and propose a fix.
 
@@ -117,11 +117,11 @@ When the user wants a new job that isn't in the marketplace, elicit these in ord
 4. **Cost tolerance:** does this need full MCP access or can it run minimal? Use the cost table to ground the conversation. Haiku + minimal surface = ~$0.04/run; MCP-using job = ~$0.20/run.
 5. **Idempotency plan:** what happens if the job runs twice? The global prompt enforces "check durable state before acting" but the job-specific prompt should make the check concrete.
 
-Once collected, write `~/.claude/scheduled-jobs/<name>.md`, ad-hoc fire to verify, and report.
+Once collected, write `~/.clauck/<name>.md`, ad-hoc fire to verify, and report.
 
 ## Auto-update configuration
 
-Config file: `~/.claude/scheduled-jobs/.clauck.config.json`
+Config file: `~/.clauck/.clauck.config.json`
 
 Default:
 
@@ -143,7 +143,7 @@ Default:
 
 **Source of truth:** the `tag_name` of the latest GitHub Release at `https://github.com/CoreyRDean/clauck/releases/latest`. Pushes to `main` never trigger an auto-update — a maintainer must explicitly cut a Release.
 
-**Ad-hoc check:** `~/.claude/scheduled-jobs/update-check.sh` (report only) or `--apply` (install).
+**Ad-hoc check:** `~/.clauck/update-check.sh` (report only) or `--apply` (install).
 
 When an update is detected, the SessionStart hook surfaces this at the top of future Claude sessions, so the user sees the notification without having to check manually.
 
@@ -219,7 +219,7 @@ run_once: true
 Send a birthday message to the team Slack channel.
 ```
 
-After firing once, the scheduler writes a `.auto-disabled` state file. The job stays in the manifest but won't fire again. User can re-enable by deleting `~/.claude/scheduled-jobs/.state/<name>.auto-disabled`.
+After firing once, the scheduler writes a `.auto-disabled` state file. The job stays in the manifest but won't fire again. User can re-enable by deleting `~/.clauck/.state/<name>.auto-disabled`.
 
 ### `max_runs: N` — fire N times, then auto-disable
 
@@ -232,7 +232,7 @@ max_runs: 5
 Check if the new hire completed each onboarding step. Post progress to Slack.
 ```
 
-Counter tracked at `~/.claude/scheduled-jobs/.state/<name>.runs-remaining`. Decrements on each fire. At zero, auto-disabled.
+Counter tracked at `~/.clauck/.state/<name>.runs-remaining`. Decrements on each fire. At zero, auto-disabled.
 
 ### `valid_after: "<ISO date>"` — don't fire until this date
 
@@ -299,7 +299,7 @@ When designing a job for the user, ask which pattern they want if the intent is 
 
 ### Discoverability
 
-If a job writes to a local file, tell the user exactly where it is after installation. When proactively suggesting a job, mention the output path as part of the pitch: *"I'd write a morning brief to `~/.claude/scheduled-jobs/morning-brief-feed.md` — want me to set it up?"*
+If a job writes to a local file, tell the user exactly where it is after installation. When proactively suggesting a job, mention the output path as part of the pitch: *"I'd write a morning brief to `~/.clauck/morning-brief-feed.md` — want me to set it up?"*
 
 ## Pipelines (producers and consumers)
 
@@ -383,9 +383,9 @@ Because it has `session_persist: true`, it accumulates knowledge about recurring
 ```
 launchd LaunchAgent (ticks every 60s)
    └─→ scheduler.py
-         ├─ scans ~/.claude/scheduled-jobs/*.md for job prompts
+         ├─ scans ~/.clauck/*.md for job prompts
          ├─ parses YAML frontmatter (cron, budgets, semantic_hooks, …)
-         ├─ writes ~/.claude/scheduled-jobs/.manifest.json
+         ├─ writes ~/.clauck/.manifest.json
          └─ for each job whose cron matches the current minute,
             fires run-job.sh <name> in a detached login shell
                 └─→ run-job.sh
@@ -404,16 +404,16 @@ One master LaunchAgent, N jobs. Adding a job is dropping a Markdown file.
 
 | Path | Purpose |
 |---|---|
-| `~/.claude/scheduled-jobs/scheduler.py` | Discovery + dispatch. Runs every 60s. |
-| `~/.claude/scheduled-jobs/run-job.sh` | Per-job executor (log, preflight, compose runtime context, run claude). |
-| `~/.claude/scheduled-jobs/trigger-job.sh` | Ad-hoc-fire wrapper. Used by other agents that match a semantic hook. |
-| `~/.claude/scheduled-jobs/<name>.md` | A job: YAML frontmatter + prompt body. |
-| `~/.claude/scheduled-jobs-prompt.md` | Global system prompt appended to every job. |
-| `~/.claude/scheduled-jobs/.manifest.json` | Regenerated every tick. All jobs with their `cron`, `semantic_hooks`, and `trigger_command`. |
-| `~/.claude/scheduled-jobs/.state/<name>.last-run` | Per-job last-fire epoch (cron-duplication guard). |
-| `~/.claude/scheduled-jobs/<name>-<utc-ts>.log` | Per-run log. Rotated at 100 per job. |
-| `~/.claude/scheduled-jobs/.scheduler-stdout.log` | Master scheduler stdout (one line per fire). |
-| `~/.claude/scheduled-jobs/.scheduler-stderr.log` | Master scheduler stderr (bad crons, etc). |
+| `~/.clauck/scheduler.py` | Discovery + dispatch. Runs every 60s. |
+| `~/.clauck/run-job.sh` | Per-job executor (log, preflight, compose runtime context, run claude). |
+| `~/.clauck/trigger-job.sh` | Ad-hoc-fire wrapper. Used by other agents that match a semantic hook. |
+| `~/.clauck/<name>.md` | A job: YAML frontmatter + prompt body. |
+| `~/.clauck-prompt.md` | Global system prompt appended to every job. |
+| `~/.clauck/.manifest.json` | Regenerated every tick. All jobs with their `cron`, `semantic_hooks`, and `trigger_command`. |
+| `~/.clauck/.state/<name>.last-run` | Per-job last-fire epoch (cron-duplication guard). |
+| `~/.clauck/<name>-<utc-ts>.log` | Per-run log. Rotated at 100 per job. |
+| `~/.clauck/.scheduler-stdout.log` | Master scheduler stdout (one line per fire). |
+| `~/.clauck/.scheduler-stderr.log` | Master scheduler stderr (bad crons, etc). |
 | `~/Library/LaunchAgents/com.<username>.claude-scheduler.plist` | The LaunchAgent. |
 
 ## Frontmatter schema (the job contract)
@@ -490,7 +490,7 @@ semantic_hooks:                     # natural-language triggers for ad-hoc firin
 A running job receives three stacked prompts:
 
 1. **User prompt** (`-p <body>`): the job's own `<name>.md` with YAML frontmatter stripped.
-2. **Appended system prompt**: the global `scheduled-jobs-prompt.md` concatenated with a **Runtime Context** block the executor composes per invocation. Runtime Context includes: job name, trigger source (`scheduled` or `adhoc`) plus cron expression, fire-at timestamp, budget (max_turns / max_budget_usd / effort), cwd, the exact log-file path for this run, the jobs directory, and the manifest path.
+2. **Appended system prompt**: the global `prompt.md` concatenated with a **Runtime Context** block the executor composes per invocation. Runtime Context includes: job name, trigger source (`scheduled` or `adhoc`) plus cron expression, fire-at timestamp, budget (max_turns / max_budget_usd / effort), cwd, the exact log-file path for this run, the jobs directory, and the manifest path.
 3. **Claude's own defaults** (tools, MCP surface, memory).
 
 Everything is resolved via `zsh -l` so PATH / nvm / keychain mirror the user's Terminal. MCPs auto-load from the user's configured MCP surface.
@@ -510,7 +510,7 @@ Prerequisites: macOS, `zsh` (default), `/usr/bin/python3`, `claude` CLI installe
 ### Step 1: Create the directory layout
 
 ```bash
-mkdir -p ~/.claude/scheduled-jobs/.state
+mkdir -p ~/.clauck/.state
 mkdir -p ~/Library/LaunchAgents
 ```
 
@@ -529,7 +529,7 @@ Or use the one-liner from the README:
 curl -sSL https://raw.githubusercontent.com/CoreyRDean/clauck/main/install.sh | bash
 ```
 
-The installer places scripts in `~/.claude/scheduled-jobs/`, the skill in `~/.claude/skills/clauck/`, the hook in `~/.claude/hooks/`, and the LaunchAgent in `~/Library/LaunchAgents/`. After install, consider editing `~/.claude/scheduled-jobs-prompt.md` to add environment-specific durable-state guidance if useful for your jobs.
+The installer places scripts in `~/.clauck/`, the skill in `~/.claude/skills/clauck/`, the hook in `~/.claude/hooks/`, and the LaunchAgent in `~/Library/LaunchAgents/`. After install, consider editing `~/.clauck-prompt.md` to add environment-specific durable-state guidance if useful for your jobs.
 
 ### Step 3: Install the LaunchAgent
 
@@ -547,7 +547,7 @@ Create `~/Library/LaunchAgents/com.<username>.claude-scheduler.plist` (replace `
     <array>
         <string>/bin/zsh</string>
         <string>-lc</string>
-        <string>/usr/bin/python3 "$HOME/.claude/scheduled-jobs/scheduler.py"</string>
+        <string>/usr/bin/python3 "$HOME/.clauck/scheduler.py"</string>
     </array>
 
     <key>StartInterval</key>
@@ -560,10 +560,10 @@ Create `~/Library/LaunchAgents/com.<username>.claude-scheduler.plist` (replace `
     <string>Background</string>
 
     <key>StandardOutPath</key>
-    <string>/Users/<username>/.claude/scheduled-jobs/.scheduler-stdout.log</string>
+    <string>/Users/<username>/.clauck/.scheduler-stdout.log</string>
 
     <key>StandardErrorPath</key>
-    <string>/Users/<username>/.claude/scheduled-jobs/.scheduler-stderr.log</string>
+    <string>/Users/<username>/.clauck/.scheduler-stderr.log</string>
 
     <key>EnvironmentVariables</key>
     <dict>
@@ -584,7 +584,7 @@ launchctl list | grep claude-scheduler
 
 ### Step 5: Verify with a disposable job
 
-Drop a one-shot verification job at `~/.claude/scheduled-jobs/probe.md`:
+Drop a one-shot verification job at `~/.clauck/probe.md`:
 
 ```yaml
 ---
@@ -602,19 +602,19 @@ Reply with one line: `probe ok <ISO8601 UTC>`. No preamble.
 Fire it ad-hoc:
 
 ```bash
-~/.claude/scheduled-jobs/trigger-job.sh probe
+~/.clauck/trigger-job.sh probe
 # Wait ~10 seconds, then:
-ls -t ~/.claude/scheduled-jobs/probe-*.log | head -1 | xargs tail
+ls -t ~/.clauck/probe-*.log | head -1 | xargs tail
 # Expect: "--- exit_code=0 ===" and a JSON envelope whose `result` contains "probe ok <timestamp>"
 ```
 
-Delete the probe when done: `rm ~/.claude/scheduled-jobs/probe.md ~/.claude/scheduled-jobs/probe-*.log`.
+Delete the probe when done: `rm ~/.clauck/probe.md ~/.clauck/probe-*.log`.
 
 ## Adding a job
 
-1. Create `~/.claude/scheduled-jobs/<name>.md` with the frontmatter schema above and a prompt body describing exactly what this invocation should do.
+1. Create `~/.clauck/<name>.md` with the frontmatter schema above and a prompt body describing exactly what this invocation should do.
 2. The scheduler regenerates the manifest within 60 seconds. No `launchctl reload` needed.
-3. Verify with `~/.claude/scheduled-jobs/trigger-job.sh <name>` before waiting for the first cron fire.
+3. Verify with `~/.clauck/trigger-job.sh <name>` before waiting for the first cron fire.
 
 **Prompt writing tips** for scheduled jobs (different from interactive prompts):
 
@@ -650,40 +650,40 @@ Corollaries:
 
 ```bash
 # All discovered jobs + semantic hooks + trigger commands:
-cat ~/.claude/scheduled-jobs/.manifest.json | python3 -m json.tool
+cat ~/.clauck/.manifest.json | python3 -m json.tool
 
 # Is the scheduler running?
 launchctl list | grep claude-scheduler
 
 # Recent fires:
-tail -f ~/.claude/scheduled-jobs/.scheduler-stdout.log
+tail -f ~/.clauck/.scheduler-stdout.log
 
 # Latest run for a specific job:
-ls -t ~/.claude/scheduled-jobs/<name>-*.log | head -1 | xargs tail
+ls -t ~/.clauck/<name>-*.log | head -1 | xargs tail
 
 # Dry-run discovery without firing:
-/usr/bin/python3 ~/.claude/scheduled-jobs/scheduler.py --list
+/usr/bin/python3 ~/.clauck/scheduler.py --list
 ```
 
 ### Ad-hoc fire a job
 
 ```bash
-~/.claude/scheduled-jobs/trigger-job.sh <name>
+~/.clauck/trigger-job.sh <name>
 ```
 
 Runtime Context will report `Trigger: adhoc` so the job can distinguish this from a cron fire.
 
 ### Edit a job
 
-Edit `~/.claude/scheduled-jobs/<name>.md`. Changes take effect on the next tick (the scheduler re-parses frontmatter every minute).
+Edit `~/.clauck/<name>.md`. Changes take effect on the next tick (the scheduler re-parses frontmatter every minute).
 
 ### Remove a job
 
 ```bash
-rm ~/.claude/scheduled-jobs/<name>.md
+rm ~/.clauck/<name>.md
 # Optionally clean up:
-rm -f ~/.claude/scheduled-jobs/.state/<name>.last-run
-rm -f ~/.claude/scheduled-jobs/<name>-*.log
+rm -f ~/.clauck/.state/<name>.last-run
+rm -f ~/.clauck/<name>-*.log
 ```
 
 ### Stop the scheduler (e.g., during maintenance)
@@ -701,7 +701,7 @@ launchctl load -w ~/Library/LaunchAgents/com.<username>.claude-scheduler.plist
 ### Reset a job's cron-duplicate guard (force the next matching minute to fire)
 
 ```bash
-rm -f ~/.claude/scheduled-jobs/.state/<name>.last-run
+rm -f ~/.clauck/.state/<name>.last-run
 ```
 
 ## Common mutations (recipes)
@@ -769,10 +769,10 @@ Edit the `semantic_hooks:` list in frontmatter. Agents reading `.manifest.json` 
 ### Rename a job
 
 ```bash
-mv ~/.claude/scheduled-jobs/<old>.md ~/.claude/scheduled-jobs/<new>.md
-rm -f ~/.claude/scheduled-jobs/.state/<old>.*
+mv ~/.clauck/<old>.md ~/.clauck/<new>.md
+rm -f ~/.clauck/.state/<old>.*
 # Optionally archive/remove old logs:
-rm -f ~/.claude/scheduled-jobs/<old>-*.log
+rm -f ~/.clauck/<old>-*.log
 ```
 
 Also update the `name:` field inside the frontmatter if set, otherwise the filename stem is authoritative.
@@ -789,7 +789,7 @@ stage=concurrent_skip holder_pid=12345
 --- exit_code=0 ===
 ```
 
-Implementation: `mkdir` on a state directory at `~/.claude/scheduled-jobs/.state/<name>.lock.d`. The PID of the current holder is stored inside; if the holder process dies without cleanup, a later invocation reclaims the lock.
+Implementation: `mkdir` on a state directory at `~/.clauck/.state/<name>.lock.d`. The PID of the current holder is stored inside; if the holder process dies without cleanup, a later invocation reclaims the lock.
 
 This is always on — no frontmatter field. The design avoids the surprise of multiple concurrent claude-p processes running the same job, which would be billed twice and could produce duplicate side effects.
 
@@ -891,9 +891,9 @@ Use this as an escape hatch for anything the built-in trigger types don't cover:
 
 ### Per-trigger state files
 
-Each trigger's state lives at `~/.claude/scheduled-jobs/.state/<job>.trigger-<index>.json` (index is the position in the `external_triggers` list, starting at 0). Deleting the state file re-bootstraps that trigger on the next tick — useful if you want to reset it.
+Each trigger's state lives at `~/.clauck/.state/<job>.trigger-<index>.json` (index is the position in the `external_triggers` list, starting at 0). Deleting the state file re-bootstraps that trigger on the next tick — useful if you want to reset it.
 
-Trigger evaluation errors (missing path, invalid config) are logged to `~/.claude/scheduled-jobs/.scheduler-stderr.log` and do not block other triggers or other jobs.
+Trigger evaluation errors (missing path, invalid config) are logged to `~/.clauck/.scheduler-stderr.log` and do not block other triggers or other jobs.
 
 ### Ad-hoc delegation via external triggers vs. semantic_hooks
 
@@ -918,8 +918,8 @@ This is the intended design. It trades retroactive execution for predictability:
 
 1. **Nothing fires at all.**
    - `launchctl list | grep claude-scheduler` — is it loaded? Is exit code `0`?
-   - `tail ~/.claude/scheduled-jobs/.scheduler-stderr.log` — Python errors?
-   - `/usr/bin/python3 ~/.claude/scheduled-jobs/scheduler.py --list` — does discovery work at all?
+   - `tail ~/.clauck/.scheduler-stderr.log` — Python errors?
+   - `/usr/bin/python3 ~/.clauck/scheduler.py --list` — does discovery work at all?
 
 2. **Job fires but produces no log file.**
    - This shouldn't happen — `run-job.sh` creates the log before any preflight. If you see this, the script itself failed to start. Check `.scheduler-stderr.log` and re-check `chmod +x` on `run-job.sh`.
@@ -935,13 +935,13 @@ This is the intended design. It trades retroactive execution for predictability:
    - Check the `result` field in the JSON envelope. Did it attempt the tool call? If it reported a tool as "unavailable," re-read the prompt — it may need to be more explicit about attempting calls regardless of tool-surface enumeration.
 
 6. **Double-fire in a single minute.**
-   - Shouldn't happen — last-run guard prevents it. If you see two logs with timestamps in the same minute, the guard file wasn't writable. Check `~/.claude/scheduled-jobs/.state/` permissions.
+   - Shouldn't happen — last-run guard prevents it. If you see two logs with timestamps in the same minute, the guard file wasn't writable. Check `~/.clauck/.state/` permissions.
 
 ## Other agents using this system
 
 Other agent sessions (interactive Claude Code, different long-running sessions, etc.) can delegate work to purpose-built jobs via semantic hooks:
 
-1. At session start, read `~/.claude/scheduled-jobs/.manifest.json`.
+1. At session start, read `~/.clauck/.manifest.json`.
 2. Compare each job's `semantic_hooks` against the current task.
 3. If a hook matches, run the job's `trigger_command` and let it log asynchronously rather than reinventing the work inline.
 
@@ -981,7 +981,7 @@ If an agent ad-hoc-triggers a job that's already running, the second invocation 
 A named Markdown file with optional YAML frontmatter:
 
 ```
-~/.claude/scheduled-jobs/my-job.md
+~/.clauck/my-job.md
 ```
 
 If frontmatter is missing entirely, the system applies defaults (name from filename, `max_budget_usd: 2.00`, `effort: high`, ad-hoc only). Users can literally drop any `.md` prompt file into the jobs folder and it will work.
@@ -991,7 +991,7 @@ If frontmatter is missing entirely, the system applies defaults (name from filen
 A named folder containing a `JOB.md` anchor file:
 
 ```
-~/.claude/scheduled-jobs/pe-pipeline/
+~/.clauck/pe-pipeline/
   JOB.md              ← entry point (config + prompt)
   extract.md          ← internal stage (invisible to main registry)
   refine.md           ← internal stage
@@ -1037,7 +1037,7 @@ When you encounter a genuine system limitation, unsupported feature, or a user h
    - If fork override is in the config, ask whether to report on the fork or upstream
 4. **If the user wants to fix it:** walk them through the fix, prepare a draft PR, install from source so they can use the patched version immediately while the community reviews.
 
-The config file at `~/.claude/scheduled-jobs/.clauck.config.json` has a `"repo"` field — use it as the issue target. If it's a fork and the user wants to report upstream, use `CoreyRDean/clauck`.
+The config file at `~/.clauck/.clauck.config.json` has a `"repo"` field — use it as the issue target. If it's a fork and the user wants to report upstream, use `CoreyRDean/clauck`.
 
 ## Portability and security notes
 

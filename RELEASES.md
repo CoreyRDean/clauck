@@ -11,7 +11,7 @@ line of history, three labels.
 
 `local` is a client-side label — it isn't a branch or tag. When you run
 `bash install.sh` from a git checkout, the installer stamps
-`~/.claude/scheduled-jobs/.build-source` with `channel: local`, and
+`~/.clauck/.build-source` with `channel: local`, and
 `update-check.sh` exits early so you don't get fake update notifications
 against a dev tree whose version marker doesn't reflect upstream.
 
@@ -108,7 +108,7 @@ If you run `bash install.sh` from a git checkout of the repo, the
 installer:
 
 - Detects `BASH_SOURCE[0]` points at a working tree (not a piped curl).
-- Stamps `~/.claude/scheduled-jobs/.build-source` with
+- Stamps `~/.clauck/.build-source` with
   `channel: local`, `source: local`, and the current `HEAD` SHA (plus a
   `-dirty` suffix if the tree has uncommitted changes).
 - Sets `auto_update.channel = local` in `.clauck.config.json`.
