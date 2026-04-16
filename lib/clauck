@@ -1056,7 +1056,7 @@ def cmd_inspect(name: str) -> None:
                         for md in internal_mds:
                             print(f"    [internal] {md.stem}")
 
-    # --- Module internals for the inspected job itself (shown once) ---
+    # --- Internal stage DAG for the inspected job itself ---
     if job.get("module_root"):
         mod_root = Path(job["module_root"])
         if mod_root.is_dir():
@@ -1065,9 +1065,75 @@ def cmd_inspect(name: str) -> None:
                 if p.name != "JOB.md" and not p.name.startswith(".")
             )
             if internal_mds:
-                print(f"\n  Module internals:")
-                for md in internal_mds:
-                    print(f"    [internal] {md.stem}")
+                import re as _re
+
+                def _stage_producers(md_path: Path) -> list[str]:
+                    """Parse the producers list from a stage file's frontmatter."""
+                    try:
+                        text = md_path.read_text(encoding="utf-8")
+                    except OSError:
+                        return []
+                    fm_m = _re.match(r"\A---\s*\n(.*?)\n---\s*\n?", text, _re.DOTALL)
+                    if not fm_m:
+                        return []
+                    result: list[str] = []
+                    in_prods = False
+                    for line in fm_m.group(1).splitlines():
+                        stripped = line.strip()
+                        if stripped.startswith("producers:"):
+                            tail = stripped[len("producers:"):].strip()
+                            if tail.startswith("["):
+                                for p in tail.strip("[]").split(","):
+                                    p = p.strip().strip("\"'")
+                                    if p:
+                                        result.append(p)
+                            in_prods = True
+                            continue
+                        if in_prods:
+                            if stripped.startswith("- "):
+                                item = stripped[2:].strip()
+                                if item.startswith("{"):
+                                    for part in item.strip("{}").split(","):
+                                        part = part.strip()
+                                        if ":" in part:
+                                            k, _, v = part.partition(":")
+                                            if k.strip() == "name":
+                                                result.append(v.strip().strip("\"'"))
+                                                break
+                                else:
+                                    result.append(item.strip("\"'"))
+                            elif stripped and not stripped.startswith("#"):
+                                in_prods = False
+                    return result
+
+                # Map stage_name -> [producer_names], anchored at JOB.md
+                stage_deps: dict[str, list[str]] = {
+                    md.stem: _stage_producers(md) for md in internal_mds
+                }
+                stage_deps["JOB.md"] = [
+                    p["name"] if isinstance(p, dict) else str(p)
+                    for p in job.get("producers", [])
+                ]
+
+                def _render_internal_dag(node: str, prefix: str, is_last: bool, seen: set) -> None:
+                    """Recursively render the internal stage DAG with ASCII connectors."""
+                    if node == "JOB.md":
+                        print(f"  {node}")
+                    else:
+                        connector = "└─ " if is_last else "├─ "
+                        suffix = " (seen, ref)" if node in seen else " (internal)"
+                        print(f"  {prefix}{connector}{node}{suffix}")
+                    if node in seen:
+                        return
+                    seen.add(node)
+                    children = stage_deps.get(node, [])
+                    for idx, child in enumerate(children):
+                        child_is_last = idx == len(children) - 1
+                        child_prefix = "" if node == "JOB.md" else prefix + ("   " if is_last else "│  ")
+                        _render_internal_dag(child, child_prefix, child_is_last, seen)
+
+                print(f"\n  Internal stage DAG:")
+                _render_internal_dag("JOB.md", "", False, set())
 
     print()
 
