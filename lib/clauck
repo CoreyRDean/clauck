@@ -1138,6 +1138,80 @@ def cmd_inspect(name: str) -> None:
     print()
 
 
+def _parse_interpreter_result(
+    result: "subprocess.CompletedProcess[str]",
+    _re: "module",
+) -> tuple[dict, str]:
+    """Parse stage-1 interpreter output into (routing_dict, error_string).
+
+    Handles both success (returncode 0) and failure (returncode != 0) by
+    reading the JSON envelope from stdout.  claude -p --output-format json
+    puts ALL diagnostics in the stdout envelope — stderr is typically empty.
+    """
+    routing: dict = {}
+    interpreter_error = ""
+
+    envelope: dict = {}
+    if result.stdout and result.stdout.strip():
+        try:
+            envelope = json.loads(result.stdout)
+        except (json.JSONDecodeError, ValueError):
+            pass
+
+    if result.returncode == 0 and envelope:
+        inner = envelope.get("result", "").strip()
+        json_match = _re.search(r'\{[\s\S]*\}', inner)
+        if json_match:
+            try:
+                routing = json.loads(json_match.group(0))
+            except (json.JSONDecodeError, ValueError) as e:
+                interpreter_error = f"interpreter JSON parse failed: {e}"
+        else:
+            interpreter_error = f"no JSON in interpreter output: {inner[:200]}"
+    elif result.returncode != 0:
+        # Extract error details from the stdout JSON envelope — that's
+        # where claude -p --output-format json puts them.  stderr is
+        # typically empty for this invocation pattern.
+        diag_parts: list[str] = []
+        subtype = envelope.get("subtype", "")
+        errors = envelope.get("errors", [])
+        if subtype:
+            diag_parts.append(subtype)
+        if errors:
+            diag_parts.append("; ".join(str(e) for e in errors))
+        if not diag_parts and result.stderr.strip():
+            diag_parts.append(result.stderr.strip()[:200])
+        interpreter_error = (
+            f"interpreter exited {result.returncode}: "
+            f"{' — '.join(diag_parts) or '(no diagnostic output)'}"
+        )
+    elif not envelope:
+        interpreter_error = "interpreter produced no output"
+
+    return routing, interpreter_error
+
+
+def _log_interpreter_failure(
+    interpreter_error: str,
+    result: "subprocess.CompletedProcess[str]",
+    context_label: str,
+) -> None:
+    """Write the full interpreter failure to a debug file for post-hoc analysis."""
+    try:
+        STATE_DIR.mkdir(parents=True, exist_ok=True)
+        debug_path = STATE_DIR / ".interpreter-last-failure.json"
+        debug_path.write_text(json.dumps({
+            "context": context_label,
+            "error": interpreter_error,
+            "returncode": result.returncode,
+            "stdout": result.stdout[:2000] if result.stdout else "",
+            "stderr": result.stderr[:2000] if result.stderr else "",
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+        }, indent=2) + "\n")
+    except Exception:
+        pass  # debug logging must never mask the primary failure
+
+
 def _build_doctor_interpreter_prompt(mode_label: str, context: str) -> str:
     """Stage-1 doctor interpreter: pick complexity-scaled execution params.
 
@@ -1410,7 +1484,7 @@ def cmd_doctor(
              "--append-system-prompt", interpreter_prompt,
              "--model", "sonnet",
              "--max-turns", "2",
-             "--max-budget-usd", "0.15",
+             "--max-budget-usd", "0.25",
              "--output-format", "json",
              "--setting-sources", "",
              "--strict-mcp-config",
@@ -1422,24 +1496,11 @@ def cmd_doctor(
         spin_thread.join(timeout=0.5)
         raise
 
-    routing: dict = {}
-    interpreter_error = ""
-    if result_s1.returncode == 0 and result_s1.stdout.strip():
-        try:
-            envelope = json.loads(result_s1.stdout)
-            inner = envelope.get("result", "").strip()
-            match = _re.search(r'\{[\s\S]*\}', inner)
-            if match:
-                routing = json.loads(match.group(0))
-            else:
-                interpreter_error = f"no JSON in interpreter output: {inner[:200]}"
-        except (json.JSONDecodeError, ValueError) as e:
-            interpreter_error = f"interpreter JSON parse failed: {e}"
-    elif result_s1.returncode != 0:
-        interpreter_error = f"interpreter exit {result_s1.returncode}: {result_s1.stderr[:200]}"
+    routing, interpreter_error = _parse_interpreter_result(result_s1, _re)
 
     if not routing:
         if interpreter_error:
+            _log_interpreter_failure(interpreter_error, result_s1, "doctor")
             sys.stderr.write(f"\r  ! interpreter fallback: {interpreter_error[:120]}\n")
             sys.stderr.flush()
         routing = {
@@ -1819,7 +1880,7 @@ def cmd_semantic(text: str) -> None:
              "--append-system-prompt", interpreter_prompt,
              "--model", "sonnet",
              "--max-turns", "3",
-             "--max-budget-usd", "0.20",
+             "--max-budget-usd", "0.30",
              "--output-format", "json",
              "--setting-sources", "",
              "--strict-mcp-config",
@@ -1831,33 +1892,16 @@ def cmd_semantic(text: str) -> None:
         spin_thread.join(timeout=0.5)
         raise
 
-    # Parse the interpreter envelope (claude -p --output-format json gives
-    # {"result": "...", "is_error": ..., ...}); the inner result is our JSON.
-    routing = {}
-    interpreter_error = ""
-    if result_s1.returncode == 0 and result_s1.stdout.strip():
-        try:
-            envelope = json.loads(result_s1.stdout)
-            inner = envelope.get("result", "").strip()
-            # Find the JSON object in the inner text
-            json_match = _re.search(r'\{[\s\S]*\}', inner)
-            if json_match:
-                routing = json.loads(json_match.group(0))
-            else:
-                interpreter_error = f"no JSON found in interpreter output: {inner[:200]}"
-        except (json.JSONDecodeError, ValueError) as e:
-            interpreter_error = f"interpreter JSON parse failed: {e}"
-    elif result_s1.returncode != 0:
-        interpreter_error = f"interpreter exited {result_s1.returncode}: {result_s1.stderr[:200]}"
+    routing, interpreter_error = _parse_interpreter_result(result_s1, _re)
 
     if not routing or "command_type" not in routing:
-        # Interpreter failed — log the reason, fall back with honest marker
         if interpreter_error:
+            _log_interpreter_failure(interpreter_error, result_s1, f"semantic: {text[:80]}")
             sys.stderr.write(f"\r  ! interpreter fallback: {interpreter_error[:120]}\n")
             sys.stderr.flush()
         routing = {
             "command_type": "semantic",
-            "interpretation": f"(interpreter failed — raw request passed through)",
+            "interpretation": "(interpreter failed — raw request passed through)",
             "enhanced_prompt": text,
             "exec_model": "sonnet",
             "exec_effort": "medium",
