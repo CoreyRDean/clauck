@@ -135,6 +135,48 @@ When the user wants a new job that isn't in the marketplace, elicit these in ord
 
 Once collected, write `~/.clauck/<name>.md`, ad-hoc fire to verify, and report.
 
+## Output directory convention
+
+Jobs that produce user-facing deliverables (reports, summaries, feed files, journal entries) should write to `$CLAUCK_OUTPUT_DIR` rather than to `~/.clauck/` or `~/`.
+
+`~/.clauck/` and `~/.clauck/.state/` are internal directories — logs, manifests, locks, and runtime state. User-facing output buried there is hard to find. `~/` is noisy. `$CLAUCK_OUTPUT_DIR` groups deliverables in one identifiable place.
+
+### What the runtime provides
+
+Every job receives `CLAUCK_OUTPUT_DIR` as an environment variable and as a line in the Runtime Context:
+
+```
+- **Output directory:** /Users/you/Documents/clauck
+```
+
+The directory is created automatically before the job runs. Job prompts can reference it as `$CLAUCK_OUTPUT_DIR` without expansion concerns.
+
+### Default location
+
+`~/Documents/clauck` — uses the standard macOS Documents folder, grouped under a `clauck/` subfolder so deliverables are identifiable without polluting the parent.
+
+### Configure the output directory
+
+Add `output_dir` to `~/.clauck/.clauck.config.json`:
+
+```json
+{
+  "output_dir": "~/Documents/clauck"
+}
+```
+
+Set any path you prefer. Tilde is expanded automatically.
+
+### Writing new marketplace jobs
+
+Use `$CLAUCK_OUTPUT_DIR` as the output location. Reference the Runtime Context line if you want the resolved path in the prompt:
+
+```
+Append to `$CLAUCK_OUTPUT_DIR/my-feed.md` (the **Output directory** in your Runtime Context).
+```
+
+`.state/` is still appropriate for internal artifacts the user doesn't need to read directly (lock files, producer outputs, trigger state).
+
 ## Auto-update configuration
 
 Config file: `~/.clauck/.clauck.config.json`

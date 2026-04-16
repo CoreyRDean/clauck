@@ -843,7 +843,8 @@ def load_config() -> dict:
             "enabled": True,
             "check_interval_seconds": 3600,
             "auto_apply": False,
-        }
+        },
+        "output_dir": "~/Documents/clauck",
     }
     if not CONFIG_PATH.exists():
         return defaults
