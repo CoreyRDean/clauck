@@ -26,7 +26,8 @@ jobs:
           #   declare -A           — associative arrays (bash 4+)
           if grep -rEn \
               '\$\{[a-zA-Z_][a-zA-Z0-9_]*,,\}|\$\{[a-zA-Z_][a-zA-Z0-9_]*\^\^\}|(^|[[:space:]])(mapfile|readarray)[[:space:]]|declare[[:space:]]+-[a-zA-Z]*A([[:space:]]|=)' \
-              install.sh uninstall.sh lib/update-check.sh lib/scheduled-jobs-notice.sh; then
+              install.sh uninstall.sh lib/update-check.sh lib/scheduled-jobs-notice.sh \
+            | grep -v '^[^:]*:[[:digit:]]*:[[:space:]]*#'; then
             echo "ERROR: bash 4+ syntax found — incompatible with macOS bash 3.2" >&2
             exit 1
           fi
