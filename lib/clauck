@@ -737,7 +737,7 @@ def cmd_marketplace_updates() -> None:
     print(f"  {len(updates)} update(s) available:\n")
     for jname, inst, latest in updates:
         print(f"    {jname:<24}  installed: {inst:<10}  latest: {latest}")
-    print(f"\n  run: clauck install <name> --update")
+    print("\n  run: clauck install <name> --update")
 
 
 def cmd_update(apply: bool = False) -> None:
@@ -1205,7 +1205,7 @@ def cmd_inspect(name: str) -> None:
 
 def _parse_interpreter_result(
     result: "subprocess.CompletedProcess[str]",
-    _re: "module",
+    _re,
 ) -> tuple[dict, str]:
     """Parse stage-1 interpreter output into (routing_dict, error_string).
 
