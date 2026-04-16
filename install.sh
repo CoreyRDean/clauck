@@ -562,20 +562,33 @@ ${C_BOLD}What just happened:${C_RESET}
   tool surface, produced a "heartbeat ok" result, wrote a log file, and
   exited with code 0. That is end-to-end proof that the system works.
 
-${C_BOLD}Next steps:${C_RESET}
-  1. Open Claude Code in any terminal. A SessionStart hook will advertise
-     this system and the marketplace to your agent.
-  2. Ask your session: ${C_BOLD}"What clauck jobs can I add from the marketplace?"${C_RESET}
-     The agent will read ~/.claude/skills/clauck/marketplace/index.json
-     and install any you pick.
-  3. Or just ask: ${C_BOLD}"What can I schedule?"${C_RESET} — the agent will design a
-     new job with you from scratch.
-  4. To inspect manually:
-       cat ~/.claude/scheduled-jobs/.manifest.json | python3 -m json.tool
-       ls ~/.claude/scheduled-jobs/  ~/.claude/skills/clauck/marketplace/
-  5. To uninstall:
-       clauck uninstall           ${C_DIM}# preserves jobs, state, and logs${C_RESET}
-       clauck uninstall --wipe    ${C_DIM}# also removes ~/.claude/scheduled-jobs${C_RESET}
+${C_BOLD}Get started (through Claude):${C_RESET}
+  Open Claude Code in any terminal. A SessionStart hook will tell your
+  agent about clauck and the marketplace automatically.
+  ${C_BOLD}"What clauck jobs can I add from the marketplace?"${C_RESET}
+  ${C_BOLD}"Schedule a job to summarize my Slack every morning"${C_RESET}
+  ${C_BOLD}"What's running? Anything fail recently?"${C_RESET}
+
+${C_BOLD}Get started (through the clauck CLI):${C_RESET}
+  clauck is also a standalone CLI at ~/.local/bin/clauck. Each command
+  launches a specialized Claude session with injected instructions tuned
+  for that task — often better results than asking through a general
+  session.
+
+  ${C_BOLD}clauck list${C_RESET}                          ${C_DIM}# all jobs, status, next fire time${C_RESET}
+  ${C_BOLD}clauck marketplace${C_RESET}                   ${C_DIM}# browse + install pre-made jobs${C_RESET}
+  ${C_BOLD}clauck fire <name>${C_RESET}                   ${C_DIM}# trigger any job right now${C_RESET}
+  ${C_BOLD}clauck doctor${C_RESET}                        ${C_DIM}# diagnose system health (specialized agent)${C_RESET}
+  ${C_BOLD}clauck logs <name>${C_RESET}                   ${C_DIM}# recent runs with costs${C_RESET}
+  ${C_BOLD}clauck <anything>${C_RESET}                    ${C_DIM}# plain English — uses a specialized agent${C_RESET}
+
+  That last one is powerful: ${C_BOLD}clauck change heartbeat to every 2 hours${C_RESET}
+  works because clauck routes natural language through an interpreter
+  with full context about your jobs, schedules, and system state.
+
+  ${C_DIM}To uninstall:${C_RESET}
+  ${C_BOLD}clauck uninstall${C_RESET}                     ${C_DIM}# preserves jobs, state, and logs${C_RESET}
+  ${C_BOLD}clauck uninstall --wipe${C_RESET}              ${C_DIM}# also removes ~/.claude/scheduled-jobs${C_RESET}
 
 ${C_DIM}Full docs: ~/.claude/skills/clauck/SKILL.md${C_RESET}
 
