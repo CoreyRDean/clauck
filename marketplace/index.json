@@ -109,6 +109,25 @@
       }
     },
     {
+      "name": "module-demo",
+      "version": "1.0.0",
+      "path": "module-demo/",
+      "category": "example",
+      "tags": ["example", "module", "reference"],
+      "one_line": "Reference module-format marketplace job. Demonstrates the <name>/JOB.md directory shape for multi-file jobs.",
+      "schedule": "ad-hoc only",
+      "cost_per_run_usd_approx": 0.01,
+      "runs_per_month_approx": 0,
+      "monthly_cost_usd_approx": 0.00,
+      "requires": {
+        "mcps": "none",
+        "setup": [
+          "Copy this directory as a starting point when building multi-file jobs.",
+          "Add stage files (<stage>.md) and declare them via producers/consumers on JOB.md."
+        ]
+      }
+    },
+    {
       "name": "git-commit-nudge",
       "version": "1.0.0",
       "path": "git-commit-nudge.md",
