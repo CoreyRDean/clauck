@@ -108,7 +108,7 @@ The marketplace lives at `marketplace/` in the repo. When users install or updat
 
 ## Modifying the core system
 
-Changes to `scheduler.py`, `run-job.sh`, `trigger-job.sh`, `install.sh`, or `uninstall.sh` affect every user on their next update. These PRs get extra scrutiny:
+Changes to `scheduler.py`, `dag-runner.py`, `run-job.sh`, `trigger-job.sh`, `lib/clauck`, `install.sh`, or `uninstall.sh` affect every user on their next update. These PRs get extra scrutiny:
 
 - **Backward compatibility.** New frontmatter fields must have defaults that preserve existing behavior. Jobs without the new field should work identically to before.
 - **No new dependencies.** The system runs on `/usr/bin/python3` (Apple-bundled, no pip) and `/bin/zsh`. Don't introduce `pip install`, `brew`, or compiled binaries.

@@ -119,6 +119,8 @@ external_triggers:                   # event-driven firing
   - {type: process_starts, match: Obsidian}
   - {type: file_changed, path: ~/Documents/inbox.md}
   - {type: command_succeeds, run: "pgrep -x 1Password"}
+inputs:                              # declared inputs with defaults (→ CLAUCK_INPUT_* env vars)
+  - {name: <NAME>, default: <value>}
 semantic_hooks:                      # natural-language triggers for agent delegation
   - <trigger description>
 producers:                           # pipeline: pull dependencies

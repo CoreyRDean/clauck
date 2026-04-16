@@ -1105,7 +1105,7 @@ Reason from the specific context, not from tiers. No two invocations have identi
 
 **Mode implications:**
 - `--dry`: read-heavy, no writes. Usually shorter.
-- `--fix`: may include edits + verification reads. Plan for more turns.
+- `--fix`: edits + **mandatory per-fix verification reads** + structured output. **Never pick haiku + low effort for --fix.** Haiku at low effort, handed a task that looks like "follow these steps," is prone to pattern-completing a markdown report instead of issuing Bash/Edit calls — a silent regression from tool use to text synthesis. **The exec prompt mandates a verification read-back after every applied fix**, so each fix costs 2 turns minimum (apply + verify), not 1. Formula: `turns = 2–4 initial reads + 2 × expected_fix_count + 2 final (overall verify + report)`. Worked example: a 3-fix session needs ~2 + 6 + 2 = 10 turns at the *theoretical floor*, and real sessions drift up by 30–50% from retries, grep calls, state checks, and log-reading that the agent decides it needs. Add 30% headroom. Absolute floor for --fix: sonnet OR haiku-medium, ≥ 15 turns, ≥ $0.50. Anything under 15 turns in --fix mode is undersized for any non-trivial apply-and-verify cycle.
 - `--safe`: if system-file fixes are needed, doctor escalates instead of editing — doesn't cost extra turns.
 - `--unsafe`: same as --fix for sizing; the permission scope doesn't change the work required.
 
@@ -1114,6 +1114,12 @@ Reason from the specific context, not from tiers. No two invocations have identi
 - Unclear symptom ("something is weird") → full sweep with fixes, plan for broader coverage.
 - Named subsystem failure ("pe-pipeline ran but no artifact") → focused but deep. Read the specific logs, trace the exact chain. Usually sonnet-worthy.
 - Multiple subsystems implicated or architectural suspicion → sonnet, high effort, enough turns to walk the graph.
+- **Module DAG inspection** ("inspect pe-pipeline …", "trace <module> producers", anything that walks a module's internal stages) → size by stage count. A module with N internal stages costs at minimum N+1 reads (JOB.md + each stage) before any analysis begins. pe-pipeline has 10 stages; a "find the final producer and check for a missing directive" task on it needs ≥ 20 turns — the reads-only floor is ~11, plus Bash/grep for cross-stage tracing, plus reasoning turns. Budget accordingly (sonnet, ≥ 25 turns, ≥ $1.00). Known failure: a 12-turn sizing on "inspect pe-pipeline final producer for missing prompt reconstruction directive" truncated at max_turns before the agent could synthesize.
+- **Large user-provided context** (multi-hundred-line pastes, anything that looks like `$(cat file.md)` was shell-expanded into the context — estimate from the size of the context above) → the context inlines verbatim into the execution system prompt and is paid as input tokens on **every turn**, not once. 5KB is negligible. 20KB of context over 15 turns is ~$0.10 on haiku, ~$0.30 on sonnet *before any tool work*. 50KB over 20 turns is $0.25–$0.80 on top of the diagnostic itself. Scale budget by context size: rough line count of the context above, × chosen model's per-turn rate, × expected turn count = context-only floor. Add that to the tool-work estimate. Contexts over ~200 lines → 1.5× the base budget you'd otherwise pick, with a $0.60 floor in --fix modes regardless of model. Known failure: `clauck doctor --fix "$(cat /tmp/test.md)"` hit a $0.20 budget ceiling on the first turn because the sizing treated context as zero-cost.
+- **Remediation directive in context** (context contains structured markdown like "## Findings", "## Recommended fix", "## Escalation", or explicit shell commands the user wants applied — often the output of a prior `--dry` doctor pasted back into `--fix`) → this is an **execute-not-synthesize** job. The agent's task is to apply the listed fixes via tool calls (Bash/Edit), not to restate the analysis. Two distinct failure modes to size against:
+  - *Silent text-completion regression*: low-effort haiku, shown structured markdown that *looks* like a finished task, produces a compressed restatement of the findings instead of taking any action, and exits 0. Defeated by: sonnet + medium effort minimum.
+  - *Turn starvation*: the agent DOES apply fixes but the mandated apply+verify cycle inflates turns faster than the interpreter sized. Defeated by: scaling turns with the number of fixes named in the context.
+  **Count the distinct fixes in the context above** (each `rm` command, each diff block, each file to edit = one fix). Then: `turns ≥ 2 × fix_count + 5 initial/state-check + 3 slack`. A 2-fix directive: ≥ 12 turns. A 3-fix directive (e.g., edit one file + rm three state files = 4 operations): ≥ 15 turns. A 4-fix directive: ≥ 18 turns. Mandatory: sonnet, medium effort (at minimum), turns from formula, ≥ $0.75. In the `interpretation` field, prefer imperative verbs tied to the specific mutations ("Apply pe-qa directive + rm pe-resolve state files") rather than generic "address findings." Known failures: (a) `clauck doctor --fix "$(cat findings.md)"` on haiku/low returned a restructured summary of the input without executing any Bash or Edit — a silent no-op presented as a completed fix. (b) `clauck doctor --fix "$(cat /tmp/test.md)"` sized at 12 turns on a 2-operation directive (pe-qa Edit + pe-resolve state rm) truncated at max_turns despite correct model/effort — the interpreter underestimated the apply+verify turn tax.
 
 **Bias:**
 - If you're unsure whether it's small or medium, err medium. Doctor is usually invoked when something is already weird; underprovisioning wastes both runs.
@@ -1152,9 +1158,20 @@ If you notice fixes that obviously should be applied, list them in a "## Recomme
     elif safe:
         mode_block = f"""# Mode: FIX / SAFE
 
-You may edit USER job files: `.md` files directly under {JOBS_DIR}/ (flat jobs) and within module directories (e.g. {JOBS_DIR}/<module>/*.md).
+**Your job is to APPLY fixes, not recommend them.** This is --fix mode, not --dry mode. You have Edit, Write, and Bash available in this session specifically so you can make the repairs yourself. Writing "Recommended fix" or "here is the diff to apply" instead of actually applying it is a failure of this mode.
 
-You MUST NOT modify these clauck system files:
+**Mandatory behavior:**
+- If you identify a fix: **apply it now** using Edit/Write/Bash. Then re-read the changed file (or re-run the affected command) to verify the change took. Report what you applied AND what verification showed.
+- If you examine the issue and determine no fix is needed (already resolved, false alarm, user misconception): say so explicitly with the evidence. This is distinct from "recommending a fix without applying it" — the former is valid, the latter is a mode violation.
+- Do NOT produce a "## Recommended fixes" section in your output. Recommendations are --dry mode's job.
+- Do NOT ask the user for confirmation before applying. Confirmation was granted by invoking --fix. The session runs to completion and reports what it did.
+
+**Scope — you MAY edit USER job files:**
+  - `.md` files directly under {JOBS_DIR}/ (flat jobs)
+  - `.md` files within module directories (e.g. {JOBS_DIR}/<module>/*.md, including nested modules)
+  - State files under {JOBS_DIR}/.state/ (e.g., stale trigger state, auto-disable markers)
+
+**Scope — you MUST NOT modify these clauck system files:**
   - {JOBS_DIR}/scheduler.py
   - {JOBS_DIR}/dag-runner.py
   - {JOBS_DIR}/run-job.sh
@@ -1168,27 +1185,41 @@ You MUST NOT modify these clauck system files:
   - ~/.claude/skills/clauck/SKILL.md
   - ~/Library/LaunchAgents/com.*.claude-scheduler.plist
 
-If the root cause lives in a system file, STOP touching it. Write a "## Escalation: system file mutation requested" block with:
+**Escalation path (the ONLY legitimate reason not to apply a fix in this mode):** if the root cause lives in a system file above, STOP touching it and write a "## Escalation: system file mutation requested" block with:
   - Which system file(s) need changing
   - The exact diff or change required
   - Why the change is needed (root cause)
   - Why this can't be worked around at the user-job layer
 
-The human will review and decide whether to re-run with --unsafe or apply the fix manually. This is a feature, not a limitation: system files affect every user, so changes are gated."""
+The human will re-run with --unsafe or apply the fix manually. This is a feature, not a limitation: system files affect every user, so changes are gated. Anything fixable within the user-job scope is YOUR responsibility to apply in this session."""
     else:
         mode_block = f"""# Mode: FIX / UNSAFE
 
-You may edit anything under {JOBS_DIR}/ including system files (scheduler.py, dag-runner.py, run-job.sh, etc.) and other clauck components. The user explicitly opted in with --unsafe.
+**Your job is to APPLY fixes, not recommend them.** This is --fix mode. You have Edit, Write, and Bash available across the full {JOBS_DIR}/ tree including system files (scheduler.py, dag-runner.py, run-job.sh, etc.). The user explicitly opted in with --unsafe. Writing "Recommended fix" instead of actually applying it is a mode violation.
 
-Still prefer minimal-blast-radius fixes. If a user-job fix and a system-file fix would both resolve the issue, pick the user-job fix. System file changes should be deliberate, explained, and tied to a concrete failure — not speculative cleanup."""
+**Mandatory behavior:**
+- If you identify a fix: **apply it now** using Edit/Write/Bash. Re-read or re-run to verify. Report what you applied AND what verification showed.
+- If you determine no fix is needed (already resolved, false alarm): say so with evidence.
+- Do NOT produce a "## Recommended fixes" section. Do NOT ask the user for confirmation before applying — confirmation was granted by invoking --fix --unsafe.
+
+**Scope:** the entire clauck install. Still prefer minimal-blast-radius fixes. If a user-job fix and a system-file fix would both resolve the issue, pick the user-job fix. System file changes should be deliberate, explained, and tied to a concrete failure — not speculative cleanup."""
 
     return f"""You are `clauck doctor` — a diagnostic and repair agent for the clauck workflow automation system on this machine.
 
 {mode_block}
 
-# Diagnostic surface
+# User context (this is your task — read it first)
+{context.strip() or "(none — run a general health sweep)"}
 
-Inspect in order of likelihood:
+# How to use the context
+
+**If the context is specific** — it names files, describes concrete findings, lists fixes to apply, or is clearly the output of a prior `--dry` doctor being handed back to `--fix` — then the context **is** your task. Do NOT run a general health sweep. Go directly to the files/operations the context names. Read only what you need to apply and verify the specified fixes. The diagnostic menu below is **not** a checklist — it is a fallback for the vague-context case. Walking it in addition to specific fixes burns turns you need for applying and verifying. Turn budgets assume you skip the menu when context is specific.
+
+**If the context is vague** ("something's weird", "check health", or empty) — then yes, walk the diagnostic menu below in priority order until you find something actionable, then stop the sweep and focus on what you found.
+
+# Diagnostic surface (fallback menu for vague-context sessions only)
+
+Priority order — not a mandatory checklist:
 1. **LaunchAgent** — `launchctl list | grep claude-scheduler`. If not loaded, that's a blocker.
 2. **Scheduler output** — `tail -50 {JOBS_DIR}/.scheduler-stderr.log` and `{JOBS_DIR}/.scheduler-stdout.log`.
 3. **Manifest freshness** — `stat {MANIFEST}` and compare mtime to now; if older than ~2 minutes the scheduler isn't ticking.
@@ -1199,24 +1230,45 @@ Inspect in order of likelihood:
 8. **Frontmatter errors** — parse each job .md; report malformed YAML.
 9. **Version / update state** — `cat {JOBS_DIR}/.version` and `{STATE_DIR}/.update-available` if present.
 
-# User context
-{context.strip() or "(none — run a general health sweep)"}
+Stop walking the menu as soon as you have a concrete issue to address. Finding one real problem in items 1–3 means items 4–9 are not your business for this session.
 
 # Output shape
 
-Keep output tight. Prefer:
+Keep output tight. Template depends on mode:
 
+**DRY mode:**
 ```
 ## Health summary
 <one-line overall status>
 
 ## Findings
-1. <Issue>: <root cause>. <Fix applied | Recommended fix>.
+1. <Issue>: <root cause>. <Recommended fix: exact command or diff>.
 2. ...
 
-## Recommended fixes / Escalations
-<only if dry or escalating>
+## Recommended fixes
+<exact commands or diffs, grouped and deduplicated>
 ```
+
+**FIX mode (safe or unsafe):**
+```
+## Health summary
+<one-line overall status>
+
+## Findings
+1. <Issue>: <root cause>. <Applied: what you did>. <Verified: what you checked after>.
+2. ...
+
+## Applied fixes
+<list of each mutation actually performed: file path + summary of change. One entry per Edit/Write/Bash that mutated state.>
+
+## Escalations (only if system-file fix blocked by --safe)
+<format from mode block>
+
+## No-op verifications (only if a finding needed no action)
+<finding + evidence that confirmed no fix needed>
+```
+
+A "## Recommended fixes" section in FIX mode output is a bug. If you would have written one, apply it instead.
 
 If everything is healthy: a single line. Do not pad.
 """
@@ -1353,56 +1405,75 @@ def cmd_doctor(
     spin_thread = threading.Thread(target=spinner, daemon=True)
     spin_thread.start()
 
-    # Permission strategy:
-    #   dry  → no bypass, default permission mode (tools that mutate prompt
-    #          and would fail in non-interactive). Read tools work.
-    #   fix  → bypass with allowlist scoped to the writable surface.
+    # Permission strategy: always inject --dangerously-skip-permissions +
+    # --permission-mode bypassPermissions + an explicit --settings allowlist.
+    # Recent claude CLI sandbox guards block reads outside CWD (e.g. ~/.claude/,
+    # ~/Library/LaunchAgents/) even in --dry mode unless the settings allowlist
+    # explicitly permits them. This matches the pattern used by `clauck work`.
+    #
+    #   dry    → read-oriented allowlist. Reads anywhere + read-only bash.
+    #            The exec prompt forbids mutation; no Write/Edit allow rules
+    #            mean the sandbox is defense-in-depth on top of that.
+    #   fix/safe   → adds user-job .md writes (module + flat).
+    #   fix/unsafe → opens full Bash/Write/Edit surface.
     cli = [claude_bin, "-p", "Run the doctor diagnostic per your system prompt.",
            "--append-system-prompt", exec_prompt,
            "--max-turns", exec_max_turns,
            "--max-budget-usd", exec_max_budget,
            "--model", exec_model,
+           "--effort", exec_effort,
            "--output-format", "json",
            "--setting-sources", ""]
 
-    if not dry:
-        # Fix mode: need write permission. --safe keeps the allowlist tight to
-        # .md files; --unsafe opens the full scheduled-jobs tree.
-        if safe:
-            allowlist = {
-                "permissions": {
-                    "defaultMode": "bypassPermissions",
-                    "allow": [
-                        "Read(**)",
-                        "Bash(launchctl *)",
-                        "Bash(ls *)",
-                        "Bash(cat *)",
-                        "Bash(tail *)",
-                        "Bash(stat *)",
-                        "Bash(grep *)",
-                        "Bash(find *)",
-                        # User-job writes only — not system scripts.
-                        f"Write({JOBS_DIR}/*.md)",
-                        f"Edit({JOBS_DIR}/*.md)",
-                        f"Write({JOBS_DIR}/*/**.md)",
-                        f"Edit({JOBS_DIR}/*/**.md)",
-                    ],
-                }
+    read_only_allow = [
+        "Read(**)",
+        "Bash(launchctl *)",
+        "Bash(ls *)",
+        "Bash(cat *)",
+        "Bash(tail *)",
+        "Bash(head *)",
+        "Bash(stat *)",
+        "Bash(grep *)",
+        "Bash(find *)",
+        "Bash(wc *)",
+        "Bash(pgrep *)",
+        "Bash(ps *)",
+        "Bash(date *)",
+        "Bash(plutil *)",
+        "Bash(file *)",
+    ]
+
+    if dry:
+        allowlist = {
+            "permissions": {
+                "defaultMode": "bypassPermissions",
+                "allow": read_only_allow,
             }
-        else:
-            allowlist = {
-                "permissions": {
-                    "defaultMode": "bypassPermissions",
-                    "allow": [
-                        "Bash(*)", "Read(**)", "Write(**)", "Edit(**)",
-                        f"Write({JOBS_DIR}/**)",
-                        f"Edit({JOBS_DIR}/**)",
-                    ],
-                }
+        }
+    else:
+        # Fix mode (both --safe and --unsafe): use the same broad permission
+        # surface as `clauck work`. Three attempts at glob-scoped allowlists
+        # for --safe (*.md, /*/**.md, **/*.md) all failed to match module-
+        # depth paths in Claude Code's settings matcher — producing permission
+        # blocks on user job files that doctor was explicitly supposed to edit.
+        # The safe/unsafe distinction is now enforced entirely by the exec
+        # prompt, which explicitly lists forbidden system files in --safe mode.
+        # This matches how `clauck work` operates (full bypass, prompt-scoped).
+        allowlist = {
+            "permissions": {
+                "defaultMode": "bypassPermissions",
+                "allow": [
+                    "Bash(*)", "Read(**)", "Write(**)", "Edit(**)",
+                    f"Write({JOBS_DIR}/**)",
+                    f"Edit({JOBS_DIR}/**)",
+                    f"Bash(rm *{STATE_DIR}/*)",
+                    f"Bash(mkdir *{JOBS_DIR}/*)",
+                ],
             }
-        cli += ["--dangerously-skip-permissions",
-                "--permission-mode", "bypassPermissions",
-                "--settings", json.dumps(allowlist)]
+        }
+    cli += ["--dangerously-skip-permissions",
+            "--permission-mode", "bypassPermissions",
+            "--settings", json.dumps(allowlist)]
 
     try:
         result = subprocess.run(cli, capture_output=True, text=True)
@@ -1845,6 +1916,7 @@ def cmd_semantic(text: str) -> None:
              "--max-turns", exec_max_turns,
              "--max-budget-usd", exec_max_budget,
              "--model", exec_model,
+             "--effort", exec_effort,
              "--output-format", "json",
              "--setting-sources", ""],
             capture_output=True, text=True,
