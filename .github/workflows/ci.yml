@@ -7,6 +7,38 @@ on:
 
 jobs:
   lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: shellcheck (bash scripts)
+        run: |
+          shellcheck --severity=error \
+            install.sh uninstall.sh \
+            lib/update-check.sh lib/scheduled-jobs-notice.sh
+          echo "shellcheck passed"
+
+      - name: Bash 3.2 compatibility check
+        run: |
+          # Detect bash 4+ features that break macOS's system bash (3.2):
+          #   ${var,,} / ${var^^}  — case-modification expansion (bash 4+)
+          #   mapfile / readarray  — bash 4+
+          #   declare -A           — associative arrays (bash 4+)
+          if grep -rEn \
+              '\$\{[a-zA-Z_][a-zA-Z0-9_]*,,\}|\$\{[a-zA-Z_][a-zA-Z0-9_]*\^\^\}|(^|[[:space:]])(mapfile|readarray)[[:space:]]|declare[[:space:]]+-[a-zA-Z]*A([[:space:]]|=)' \
+              install.sh uninstall.sh lib/update-check.sh lib/scheduled-jobs-notice.sh; then
+            echo "ERROR: bash 4+ syntax found — incompatible with macOS bash 3.2" >&2
+            exit 1
+          fi
+          echo "No bash 4+ syntax detected"
+
+      - name: Python linting (ruff)
+        run: |
+          pip install ruff --quiet
+          ruff check --select=E9,F lib/scheduler.py lib/dag-runner.py lib/clauck
+          echo "ruff passed"
+
+  check:
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
