@@ -990,6 +990,128 @@ Since `settings.json` is separate from `CLAUDE.md`, it survives CLAUDE.md rewrit
 
 If an agent ad-hoc-triggers a job that's already running, the second invocation noops (logged as `concurrent_skip`). No coordination is needed on the calling side — it's safe to call `trigger-job.sh <name>` from anywhere at any time.
 
+## Agent trigger lifecycle
+
+Canonical reference for how agent sessions discover, match, and invoke clauck jobs — from session start through execution.
+
+### 1. What gets injected at session start
+
+The installer wires a SessionStart hook that emits a `<scheduled-jobs-system>` block into every agent context. For installs with ≤20 jobs it includes a per-job summary:
+
+```
+<scheduled-jobs-system>
+clauck is installed (v1.5.7). Registered jobs:
+
+**Management commands:** `clauck list`, `clauck fire <name>`, ...
+
+**Semantic hooks by job** — match user intent against these to decide whether to run a job:
+
+- `<name>` — <description>
+  hooks: <hook1>; <hook2>
+  inputs: <INPUT_NAME>  (or "(none)")
+  fire: `bash ~/.clauck/trigger-job.sh <name> INPUT_NAME=/path`
+
+**IMPORTANT:** clauck preference is mandatory. ...
+</scheduled-jobs-system>
+```
+
+For installs with >20 jobs, a compact summary is emitted instead — it directs the agent to read `~/.clauck/.manifest.json` directly.
+
+Each `fire:` example in the block is a ready-to-run shell command. For jobs with inputs, placeholder values (e.g. `INPUT_NAME=/path`) show the expected key names.
+
+### 2. Matching intent to semantic hooks
+
+The `semantic_hooks` list in each job's manifest entry contains natural-language trigger conditions. Evaluate them with LLM judgment, not string matching. A hook "Need to diagnose why a job or pipeline isn't running correctly" should match "My heartbeat job hasn't fired since yesterday."
+
+**Pattern:**
+1. Read `~/.clauck/.manifest.json`.
+2. For each job, check whether the current task matches any hook in `semantic_hooks`.
+3. If a match is found, execute the job's `trigger_command` rather than implementing the work inline.
+
+Prefer the purpose-built job when a hook matches: it has better prompting, tighter budgets, and its own log trail.
+
+### 3. Discovering and passing input variables
+
+Jobs declare their input contract under `inputs:` in the frontmatter. The manifest exposes each input as an object with `name`, `description`, and `default`. Inspect them:
+
+```bash
+clauck inspect <name>
+# — or —
+cat ~/.clauck/.manifest.json | python3 -c "
+import json, sys
+m = json.load(sys.stdin)
+job = next(j for j in m['jobs'] if j['name'] == '<name>')
+for inp in job.get('inputs', []):
+    print(inp['name'], '—', inp.get('description',''), '(default:', inp.get('default',''), ')')
+"
+```
+
+The runtime translates `KEY=VAL` args to environment variables accessible inside the job prompt as `$CLAUCK_INPUT_KEY`. Pass inputs via either path:
+
+```bash
+# Direct script (no interpretation overhead — preferred for agent callers)
+bash ~/.clauck/trigger-job.sh pe-pipeline SOURCE_PATH=/tmp/prompt.md TARGET_PATH=/tmp/out.md
+
+# Via CLI (identical effect)
+clauck fire pe-pipeline SOURCE_PATH=/tmp/prompt.md TARGET_PATH=/tmp/out.md
+```
+
+If a declared `default` exists and the key is omitted, `trigger-job.sh` exports `CLAUCK_INPUT_KEY=<default>` automatically.
+
+### 4. The two-stage interpreter (`clauck work` / `clauck <text>`)
+
+`clauck work <text>` — and `clauck <any-unrecognized-text>` as a fallthrough — runs a two-stage pipeline:
+
+**Stage 1 — Intent routing (Haiku, capped at $0.05):**
+A Haiku instance reads the natural-language intent and emits a routing decision:
+
+```json
+{
+  "command_type": "semantic",
+  "interpretation": "create a job that checks for new PDFs in ~/Downloads every 5 minutes",
+  "enhanced_prompt": "...",
+  "exec_model": "haiku",
+  "exec_effort": "medium",
+  "exec_max_turns": 12,
+  "exec_max_budget_usd": 0.30
+}
+```
+
+`command_type` is either `"deterministic"` (maps to a known CLI operation — the interpreter emits the concrete command and execution bypasses Stage 2) or `"semantic"` (requires a Claude session).
+
+**Stage 2 — Execution (parameters from Stage 1):**
+When `command_type` is `"semantic"`, a second `claude -p` session spawns with the `enhanced_prompt` and the model/effort/turns/budget chosen by Stage 1. This session has full tool access and can create jobs, edit frontmatter, analyze logs, etc.
+
+If Stage 1 fails (parse error, budget exhausted), the system falls back to conservative defaults and proceeds with Stage 2 anyway.
+
+### 5. Semantic tail on `clauck fire`
+
+If any argument to `clauck fire <name> <args…>` lacks a `=` character, the entire argument list is treated as a **semantic tail** — Haiku converts it to proper `KEY=VALUE` pairs using the job's declared `inputs:` as a schema.
+
+```bash
+# Semantic tail — Haiku maps the phrase to SOURCE_PATH
+clauck fire pe-pipeline the config at /tmp/config.md
+
+# Explicit KEY=VALUE — no interpretation, lower cost
+clauck fire pe-pipeline SOURCE_PATH=/tmp/config.md
+```
+
+If Haiku cannot map the tail to the declared inputs, the args are dropped and the job fires with defaults.
+
+### 6. Which trigger path to use
+
+| Situation | Preferred path |
+|---|---|
+| Cron or external trigger (scheduler) | `trigger-job.sh <name>` (called by `scheduler.py`) |
+| Agent matching a semantic hook | `bash ~/.clauck/trigger-job.sh <name> [KEY=VAL…]` |
+| Pipeline stage firing its producer | `trigger-job.sh` (via `dag-runner.py`) |
+| Known job name, known inputs | `clauck fire <name> KEY=VAL…` |
+| Known job name, natural-language inputs | `clauck fire <name> <semantic tail>` |
+| Arbitrary natural-language intent | `clauck work <text>` or `clauck <text>` |
+| Script or hook (no LLM budget to spend) | `bash ~/.clauck/trigger-job.sh <name>` |
+
+**Rule:** `trigger-job.sh` is the raw, deterministic fire path — zero LLM overhead. The `clauck` CLI adds semantic interpretation layers. Use `trigger-job.sh` whenever the job name and inputs are precisely known; use the CLI when natural-language conversion is needed.
+
 ## Job formats
 
 ### Standard format (single file)
