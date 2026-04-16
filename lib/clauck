@@ -19,6 +19,7 @@ Usage:
     clauck update [--apply]              Check for / apply updates
     clauck uninstall [--wipe]            Uninstall (preserves jobs/logs unless --wipe)
     clauck config [set <key> <value>]    Show or edit config
+                                         (e.g. clauck config set notifications true)
     clauck add <path> [--name N] [--when "schedule"]  Import a file as a job
     clauck inspect <name>                 Inspect a job's config and DAG
     clauck doctor [--fix] [--unsafe] [-i] [<context>]   Diagnose system health
@@ -342,6 +343,8 @@ def cmd_status() -> None:
     print(f"  repo: {repo}")
     print(f"  auto-update: {'enabled' if auto_update.get('enabled', True) else 'disabled'}"
           f" (auto-apply: {'on' if auto_update.get('auto_apply', False) else 'off'})")
+    notif = config.get("notifications", False)
+    print(f"  notifications: {'on' if notif else 'off'} (toggle: clauck config set notifications true/false)")
 
     # Check for pending update
     available = STATE_DIR / ".update-available"

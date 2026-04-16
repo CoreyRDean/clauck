@@ -458,4 +458,49 @@ if [ "${CLAUDE_JOB_INTERACTIVE:-}" = "1" ] && [ "$EXIT_CODE" -eq 0 ]; then
 fi
 
 echo "--- exit_code=$EXIT_CODE ===" >> "$LOG_FILE"
+
+# --- macOS push notification (opt-in via: clauck config set notifications true) ---
+/usr/bin/python3 - "${JOB_NAME}" "${EXIT_CODE}" "${LOG_FILE}" "${JOBS_DIR}/.clauck.config.json" << 'PYEOF' 2>/dev/null || true
+import json, os, subprocess, sys
+
+job_name = sys.argv[1] if len(sys.argv) > 1 else "?"
+try:
+    exit_code = int(sys.argv[2])
+except (IndexError, ValueError):
+    exit_code = 0
+log_file = sys.argv[3] if len(sys.argv) > 3 else ""
+cfg_path = sys.argv[4] if len(sys.argv) > 4 else ""
+
+try:
+    cfg = json.load(open(cfg_path))
+    if not cfg.get("notifications", False):
+        sys.exit(0)
+except Exception:
+    sys.exit(0)
+
+cost = ""
+try:
+    for line in reversed(open(log_file).read().splitlines()):
+        try:
+            obj = json.loads(line)
+            c = obj.get("total_cost_usd") or obj.get("cost_usd")
+            if c is not None:
+                cost = f"${float(c):.4f}"
+                break
+        except Exception:
+            pass
+except Exception:
+    pass
+
+if exit_code == 0:
+    body = f"completed ({cost})" if cost else "completed"
+else:
+    body = f"failed (exit {exit_code})"
+
+safe_name = job_name.replace("\\", "\\\\").replace('"', '\\"')
+safe_body = body.replace("\\", "\\\\").replace('"', '\\"')
+script = f'display notification "{safe_body}" with title "clauck: {safe_name}"'
+subprocess.run(["osascript", "-e", script], capture_output=True, timeout=5)
+PYEOF
+
 exit $EXIT_CODE
