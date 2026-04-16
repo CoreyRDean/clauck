@@ -34,7 +34,7 @@ Search Gmail for unread threads older than 48 hours. For each (cap at 15):
 1. Note: sender, subject, age, snippet.
 2. Suggest ONE action: `reply` (draft a one-liner), `archive` (not actionable), `delegate` (forward to someone), `schedule` (needs attention but not now).
 
-Append to `~/.clauck/inbox-assist-feed.md`:
+Append to `$CLAUCK_OUTPUT_DIR/inbox-assist-feed.md` (this path is in your Runtime Context under **Output directory**):
 
 ```
 ## <ISO8601 UTC>
@@ -50,4 +50,4 @@ Unread threads older than 48h: N total, N shown above.
 
 **Do not send, archive, label, or modify any email.** Read-only + local suggestions.
 
-If no unread threads older than 48h: write `## <UTC>: inbox zero ✓` and exit.
+If no unread threads older than 48h: write `## <UTC>: inbox zero ✓` to the same feed file and exit.

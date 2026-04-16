@@ -157,6 +157,25 @@ echo "stage=resolved claude=$CLAUDE_BIN" >> "$LOG_FILE"
 cd "$JOB_CWD" || die "cwd unreachable: $JOB_CWD" 5
 echo "stage=cwd cwd=$(pwd)" >> "$LOG_FILE"
 
+# --- Resolve CLAUCK_OUTPUT_DIR from config (fallback: ~/Documents/clauck) ---
+# Allow the caller to override by pre-setting CLAUCK_OUTPUT_DIR in the env.
+if [ -z "${CLAUCK_OUTPUT_DIR:-}" ]; then
+  CONFIG_FILE="$JOBS_DIR/.clauck.config.json"
+  CLAUCK_OUTPUT_DIR="$(/usr/bin/python3 -c "
+import json, os
+try:
+    data = json.loads(open('$CONFIG_FILE').read())
+    print(data.get('output_dir', '~/Documents/clauck'))
+except Exception:
+    print('~/Documents/clauck')
+" 2>/dev/null || echo "$HOME/Documents/clauck")"
+  # Expand leading ~ to $HOME (Read tool and other tools do not expand tilde)
+  CLAUCK_OUTPUT_DIR="${CLAUCK_OUTPUT_DIR/#\~/$HOME}"
+fi
+export CLAUCK_OUTPUT_DIR
+mkdir -p "$CLAUCK_OUTPUT_DIR" 2>/dev/null || true
+echo "stage=output_dir output_dir=$CLAUCK_OUTPUT_DIR" >> "$LOG_FILE"
+
 # --- Strip YAML frontmatter before passing prompt to claude ---
 # State machine: init → (inside between --- markers) → body.
 PROMPT_BODY="$(awk '
@@ -192,6 +211,7 @@ RUNTIME_CONTEXT="# Runtime Context (this invocation)
 - **Jobs directory:** ${JOBS_DIR}
 - **Manifest (all jobs, with semantic_hooks and trigger_commands):** ${JOBS_DIR}/.manifest.json
 - **Per-job state directory:** ${JOBS_DIR}/.state/
+- **Output directory:** ${CLAUCK_OUTPUT_DIR}
 
 Spend proportional to value. Budget is a cap, not a target. If there is nothing meaningful to do, exit cleanly with a brief note — a no-op is a legitimate outcome for a scheduled invocation.
 These limits are enforced — exceeding max_budget_usd or max_turns terminates the session immediately.
