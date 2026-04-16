@@ -13,6 +13,8 @@ Usage:
     clauck remove <name>                 Delete a job + its state (also: delete, rm)
     clauck logs <name> [--last N]        Show recent logs
     clauck marketplace                    Browse pre-made jobs
+    clauck marketplace info <name>        Show full details for a marketplace job
+    clauck marketplace search <query>     Search marketplace by keyword
     clauck marketplace updates            Show installed jobs with newer versions available
     clauck install <marketplace-job>     Install from marketplace
     clauck install <name> --update       Overwrite installed job with latest marketplace version
@@ -654,6 +656,87 @@ def cmd_marketplace(filter_tag: str = "") -> None:
         all_tags.update(j.get("tags", []))
     print(f"\n  filter by tag: clauck marketplace <tag>")
     print(f"  tags: {', '.join(sorted(all_tags))}")
+
+
+def cmd_marketplace_info(name: str) -> None:
+    index_file = MARKETPLACE_DIR / "index.json"
+    if not index_file.exists():
+        die("marketplace not found — run the installer to populate it")
+    index = json.loads(index_file.read_text())
+    match = [j for j in index.get("jobs", []) if j["name"] == name]
+    if not match:
+        available = ", ".join(j["name"] for j in index.get("jobs", []))
+        die(f"no marketplace job '{name}'. Available: {available}")
+    j = match[0]
+
+    catalog_ver = j.get("version", "")
+    dst = JOBS_DIR / f"{j['name']}.md"
+    installed = dst.exists()
+    installed_ver = _parse_frontmatter_version(dst) if installed else ""
+    update_available = installed and catalog_ver and installed_ver != catalog_ver
+
+    ver_str = f"  (v{catalog_ver})" if catalog_ver else ""
+    print(f"\n  {j['name']}{ver_str}")
+    print(f"  {j.get('one_line', '')}")
+    print()
+    cost = j.get("cost_per_run_usd_approx", "?")
+    monthly = j.get("monthly_cost_usd_approx", "?")
+    runs = j.get("runs_per_month_approx", "?")
+    print(f"  schedule:  {j.get('schedule', 'ad-hoc')}")
+    print(f"  cost:      ~${cost}/run  |  ~${monthly}/month ({runs} runs/month)")
+    tags = j.get("tags", [])
+    if tags:
+        print(f"  tags:      {', '.join(tags)}")
+    requires = j.get("requires", {})
+    mcps = requires.get("mcps")
+    if mcps:
+        print(f"  requires:  {mcps}")
+    setup = requires.get("setup", [])
+    if setup:
+        print(f"  customize:")
+        for step in setup:
+            print(f"    - {step}")
+    if installed:
+        if update_available:
+            print(f"\n  status:  installed (v{installed_ver}) — update available (v{catalog_ver})")
+            print(f"  upgrade: clauck install {name} --update")
+        else:
+            iv = f" (v{installed_ver})" if installed_ver else ""
+            print(f"\n  status:  installed{iv} — up to date")
+    else:
+        print(f"\n  install: clauck install {name}")
+
+
+def cmd_marketplace_search(query: str) -> None:
+    index_file = MARKETPLACE_DIR / "index.json"
+    if not index_file.exists():
+        die("marketplace not found — run the installer to populate it")
+    if not query.strip():
+        die("usage: clauck marketplace search <query>")
+    index = json.loads(index_file.read_text())
+    q = query.lower()
+    jobs = [
+        j for j in index.get("jobs", [])
+        if q in j.get("name", "").lower()
+        or q in j.get("one_line", "").lower()
+        or q in " ".join(j.get("tags", [])).lower()
+    ]
+    if not jobs:
+        print(f"  no marketplace jobs matching '{query}'")
+        all_tags: set = set()
+        for j in index.get("jobs", []):
+            all_tags.update(j.get("tags", []))
+        print(f"  browse by tag: clauck marketplace <tag>")
+        print(f"  tags: {', '.join(sorted(all_tags))}")
+        return
+    print(f"  {len(jobs)} result(s) for '{query}':\n")
+    for j in jobs:
+        installed = (JOBS_DIR / f"{j['name']}.md").exists()
+        marker = " [installed]" if installed else ""
+        cost = j.get("cost_per_run_usd_approx", "?")
+        print(f"    {j['name']:<23} ~${cost}/run  {j.get('schedule', '')}{marker}")
+        print(f"      {j.get('one_line', '')}")
+    print(f"\n  details: clauck marketplace info <name>")
 
 
 def _parse_frontmatter_version(path: Path) -> str:
@@ -2163,6 +2246,10 @@ def main() -> None:
     elif cmd == "marketplace":
         if rest and rest[0] == "updates":
             cmd_marketplace_updates()
+        elif rest and rest[0] == "info" and len(rest) >= 2:
+            cmd_marketplace_info(rest[1])
+        elif rest and rest[0] == "search":
+            cmd_marketplace_search(" ".join(rest[1:]))
         else:
             cmd_marketplace(filter_tag=rest[0] if rest else "")
     elif cmd == "install" and rest:

@@ -30,7 +30,8 @@ When the user asks something in this list, follow the playbook — don't improvi
 | User intent | Playbook |
 |---|---|
 | "What's installed / what jobs do I have?" | `cat ~/.clauck/.manifest.json \| python3 -m json.tool`. Summarize each job in one line (name, cron/triggers, purpose). Also note the installed version from `~/.clauck/.version`. |
-| "What can I add?" / "Show me the marketplace" | Read `~/.claude/skills/clauck/marketplace/index.json`. Present jobs as a compact list: `<name> (<category>) — <one_line>. Costs ~$X/mo. Requires: <mcps>`. If user mentions a category/tag, filter first. |
+| "What can I add?" / "Show me the marketplace" | Run `clauck marketplace` to browse by category, or `clauck marketplace <tag>` to filter. For full details on a specific job: `clauck marketplace info <name>`. |
+| "Find jobs for X" / "Is there a job that does Y?" | Run `clauck marketplace search <query>` — searches job name, description, and tags. |
 | "Install [marketplace job]" | See **Installing from the marketplace** below. Copy the `.md`, walk the user through any `CUSTOMIZE BEFORE INSTALLING` blocks, then ad-hoc fire to verify. |
 | "Add a new scheduled job for …" | See **Designing a new job** below. Elicit cron/trigger, budget, destination, then write the `.md`, ad-hoc fire, confirm. |
 | "Make this job depend on / use output from [other job]" | Add `producers: [{name: other-job}]` to frontmatter. Check manifest for cycle errors within 60s. See **Pipelines** below. |
