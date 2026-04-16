@@ -379,6 +379,8 @@ def execute_job(
         env["CLAUDE_JOB_DEBOUNCE_SECONDS"] = str(job_config["debounce_seconds"])
     if job_config.get("session_persist"):
         env["CLAUDE_JOB_SESSION_PERSIST"] = "1"
+    if job_config.get("trace_tool_calls"):
+        env["CLAUDE_JOB_TRACE_TOOL_CALLS"] = "1"
 
     # DAG-specific env vars so run-job.sh can find the producer outputs.
     env["CLAUDE_DAG_INVOCATION_ID"] = invocation_id

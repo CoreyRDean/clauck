@@ -284,6 +284,10 @@ def discover_jobs() -> list[dict]:
                 # running session visible, and leaves it open for user
                 # follow-up after completion.
                 "interactive": bool(fm.get("interactive", False)),
+                # trace_tool_calls: if true, switches output format to
+                # stream-json so every tool call appears in the log.
+                # Useful for pipeline debugging.
+                "trace_tool_calls": bool(fm.get("trace_tool_calls", False)),
                 # --- triggers ---
                 # external_triggers: list of flow-style-object conditions that,
                 # if met, cause the job to fire between cron slots. Evaluated
@@ -347,6 +351,7 @@ def discover_jobs() -> list[dict]:
                 "expires_after": str(fm.get("expires_after", "")).strip(),
                 "session_persist": bool(fm.get("session_persist", False)),
                 "interactive": bool(fm.get("interactive", False)),
+                "trace_tool_calls": bool(fm.get("trace_tool_calls", False)),
                 "external_triggers": list(fm.get("external_triggers", []) or []),
                 "semantic_hooks": list(fm.get("semantic_hooks", []) or []),
                 "tags": list(fm.get("tags", []) or []),
@@ -398,6 +403,7 @@ def discover_jobs() -> list[dict]:
                     "expires_after": str(stage_fm.get("expires_after", "")).strip(),
                     "session_persist": bool(stage_fm.get("session_persist", False)),
                     "interactive": bool(stage_fm.get("interactive", False)),
+                    "trace_tool_calls": bool(stage_fm.get("trace_tool_calls", False)),
                     "external_triggers": list(stage_fm.get("external_triggers", []) or []),
                     "semantic_hooks": list(stage_fm.get("semantic_hooks", []) or []),
                     "tags": list(stage_fm.get("tags", []) or []),
@@ -777,6 +783,8 @@ def fire(job: dict, trigger: str = "scheduled") -> None:
         env["CLAUDE_JOB_SESSION_PERSIST"] = "1"
     if job.get("interactive"):
         env["CLAUDE_JOB_INTERACTIVE"] = "1"
+    if job.get("trace_tool_calls"):
+        env["CLAUDE_JOB_TRACE_TOOL_CALLS"] = "1"
     env["CLAUDE_JOB_TRIGGER"] = trigger
     env["CLAUDE_JOB_FIRED_AT"] = datetime.now(timezone.utc).isoformat()
 
