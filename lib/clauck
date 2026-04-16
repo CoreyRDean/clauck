@@ -5,7 +5,7 @@ Usage:
     clauck list                          Show all jobs with status
     clauck next                          Show when each job will next fire
     clauck status                        System overview
-    clauck fire <name>                   Ad-hoc trigger a job
+    clauck fire <name> [KEY=VAL …]       Ad-hoc trigger a job (with optional inputs)
     clauck pause <name>                  Disable a job
     clauck resume <name>                 Re-enable a paused job
     clauck edit <name>                   Open job prompt in your editor (flat or module)
@@ -406,6 +406,12 @@ def cmd_fire(name: str, extra_args: list[str] | None = None) -> None:
                             args = resolved
                     except (json.JSONDecodeError, KeyError):
                         pass
+
+    bad = [a for a in args if "=" not in a]
+    if bad:
+        for b in bad:
+            print(f"warning: ignoring arg {b!r} — use KEY=VALUE format", file=sys.stderr)
+        args = [a for a in args if "=" in a]
 
     cmd = [str(TRIGGER_SCRIPT), name] + args
     result = subprocess.run(cmd, capture_output=True, text=True)
