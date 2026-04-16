@@ -13,7 +13,9 @@ Usage:
     clauck remove <name>                 Delete a job + its state (also: delete, rm)
     clauck logs <name> [--last N]        Show recent logs
     clauck marketplace                    Browse pre-made jobs
+    clauck marketplace updates            Show installed jobs with newer versions available
     clauck install <marketplace-job>     Install from marketplace
+    clauck install <name> --update       Overwrite installed job with latest marketplace version
     clauck update [--apply]              Check for / apply updates
     clauck uninstall [--wipe]            Uninstall (preserves jobs/logs unless --wipe)
     clauck config [set <key> <value>]    Show or edit config
@@ -654,7 +656,27 @@ def cmd_marketplace(filter_tag: str = "") -> None:
     print(f"  tags: {', '.join(sorted(all_tags))}")
 
 
-def cmd_install_marketplace(name: str) -> None:
+def _parse_frontmatter_version(path: Path) -> str:
+    """Return the version: value from YAML frontmatter, or '' if absent/unreadable."""
+    try:
+        text = path.read_text()
+        if not text.startswith("---"):
+            return ""
+        end = text.find("\n---", 3)
+        if end == -1:
+            return ""
+        fm = text[3:end]
+        for line in fm.splitlines():
+            if line.startswith("version:"):
+                val = line[len("version:"):].strip().strip('"').strip("'")
+                return val
+    except OSError:
+        pass
+    return ""
+
+
+def cmd_install_marketplace(name: str, update: bool = False) -> None:
+    import shutil
     index_file = MARKETPLACE_DIR / "index.json"
     if not index_file.exists():
         die("marketplace not found")
@@ -668,8 +690,12 @@ def cmd_install_marketplace(name: str) -> None:
         die(f"marketplace file missing: {src}")
     dst = JOBS_DIR / f"{name}.md"
     if dst.exists():
-        die(f"job already exists: {dst}. Remove it first or edit directly.")
-    import shutil
+        if not update:
+            die(f"job already exists: {dst}. Remove it first or use --update to overwrite.")
+        installed_ver = _parse_frontmatter_version(dst)
+        backup = JOBS_DIR / f".{name}.md.backup-v{installed_ver or 'unknown'}"
+        shutil.copy2(str(dst), str(backup))
+        print(f"  backed up: {backup}")
     shutil.copy2(str(src), str(dst))
     print(f"  installed: {dst}")
     setup = job.get("requires", {}).get("setup", [])
@@ -678,6 +704,40 @@ def cmd_install_marketplace(name: str) -> None:
         for step in setup:
             print(f"    - {step}")
     print(f"  test: clauck fire {name}")
+
+
+def cmd_marketplace_updates() -> None:
+    index_file = MARKETPLACE_DIR / "index.json"
+    if not index_file.exists():
+        die("marketplace not found — run the installer to populate it")
+    index = json.loads(index_file.read_text())
+
+    updates: list[tuple[str, str, str]] = []
+    not_versioned: list[str] = []
+
+    for job in index.get("jobs", []):
+        jname = job["name"]
+        catalog_ver = job.get("version", "")
+        dst = JOBS_DIR / f"{jname}.md"
+        if not dst.exists():
+            continue
+        if not catalog_ver:
+            not_versioned.append(jname)
+            continue
+        installed_ver = _parse_frontmatter_version(dst)
+        if installed_ver != catalog_ver:
+            updates.append((jname, installed_ver or "unknown", catalog_ver))
+
+    if not updates:
+        print("  All installed marketplace jobs are up to date.")
+        if not_versioned:
+            print(f"  (no version info for: {', '.join(not_versioned)})")
+        return
+
+    print(f"  {len(updates)} update(s) available:\n")
+    for jname, inst, latest in updates:
+        print(f"    {jname:<24}  installed: {inst:<10}  latest: {latest}")
+    print(f"\n  run: clauck install <name> --update")
 
 
 def cmd_update(apply: bool = False) -> None:
@@ -2101,9 +2161,15 @@ def main() -> None:
             rest = [r for i, r in enumerate(rest) if i != idx and i != idx + 1]
         cmd_logs(rest[0], last)
     elif cmd == "marketplace":
-        cmd_marketplace(filter_tag=rest[0] if rest else "")
+        if rest and rest[0] == "updates":
+            cmd_marketplace_updates()
+        else:
+            cmd_marketplace(filter_tag=rest[0] if rest else "")
     elif cmd == "install" and rest:
-        cmd_install_marketplace(rest[0])
+        job_arg = rest[0] if not rest[0].startswith("-") else (rest[1] if len(rest) > 1 else "")
+        if not job_arg:
+            die("usage: clauck install <marketplace-job> [--update]")
+        cmd_install_marketplace(job_arg, update="--update" in rest)
     elif cmd == "update":
         cmd_update(apply="--apply" in rest)
     elif cmd == "uninstall":

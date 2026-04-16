@@ -1,5 +1,6 @@
 ---
 name: git-commit-nudge
+version: "1.0.0"
 description: Every 4 hours, check for uncommitted changes or unpushed commits across your repos. Nudge via local feed file.
 cron: "0 */4 * * *"
 max_turns: 4
