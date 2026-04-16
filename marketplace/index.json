@@ -1,5 +1,5 @@
 {
-  "version": "v0.1.2",
+  "version": "v0.1.4",
   "description": "Curated pre-made scheduled-job prompts for clauck. Browse by category or tags; ask Claude to copy one into your scheduled-jobs directory to install.",
   "jobs": [
     {
@@ -7,12 +7,20 @@
       "version": "1.0.0",
       "path": "morning-brief.md",
       "category": "productivity",
-      "tags": ["productivity", "digest", "daily", "slack", "calendar", "jira", "standup"],
+      "tags": [
+        "productivity",
+        "digest",
+        "daily",
+        "slack",
+        "calendar",
+        "jira",
+        "standup"
+      ],
       "one_line": "Weekday morning digest: unread Slack mentions, today's calendar, and open Jira tickets in one post.",
       "schedule": "weekdays at 13:00 UTC (configurable)",
-      "cost_per_run_usd_approx": 0.20,
+      "cost_per_run_usd_approx": 0.2,
       "runs_per_month_approx": 22,
-      "monthly_cost_usd_approx": 4.40,
+      "monthly_cost_usd_approx": 4.4,
       "requires": {
         "mcps": "Slack + Google Calendar + Atlassian (any subset works; missing sections are skipped)",
         "setup": [
@@ -26,7 +34,14 @@
       "version": "1.0.0",
       "path": "github-pr-digest.md",
       "category": "productivity",
-      "tags": ["productivity", "github", "pull-requests", "digest", "daily", "code-review"],
+      "tags": [
+        "productivity",
+        "github",
+        "pull-requests",
+        "digest",
+        "daily",
+        "code-review"
+      ],
       "one_line": "Weekday digest of PRs needing your attention: reviews requested, stale drafts, recently merged.",
       "schedule": "weekdays at 14:00 UTC (configurable)",
       "cost_per_run_usd_approx": 0.12,
@@ -44,7 +59,14 @@
       "version": "1.0.0",
       "path": "inbox-zero-assist.md",
       "category": "productivity",
-      "tags": ["productivity", "gmail", "email", "triage", "inbox-zero", "daily"],
+      "tags": [
+        "productivity",
+        "gmail",
+        "email",
+        "triage",
+        "inbox-zero",
+        "daily"
+      ],
       "one_line": "End-of-day scan of Gmail threads unread for 48h+. Suggests actions in a local file. Never sends.",
       "schedule": "weekdays at 22:00 UTC (configurable)",
       "cost_per_run_usd_approx": 0.12,
@@ -63,12 +85,18 @@
       "version": "1.0.0",
       "path": "daily-verify.md",
       "category": "verification",
-      "tags": ["verification", "health-check", "daily", "mcp", "notification"],
+      "tags": [
+        "verification",
+        "health-check",
+        "daily",
+        "mcp",
+        "notification"
+      ],
       "one_line": "Daily MCP-surface health check posted to your choice of Slack/Discord/Jira/Gmail/local file.",
       "schedule": "daily at 14:00 UTC (configurable)",
-      "cost_per_run_usd_approx": 0.20,
+      "cost_per_run_usd_approx": 0.2,
       "runs_per_month_approx": 30,
-      "monthly_cost_usd_approx": 6.00,
+      "monthly_cost_usd_approx": 6.0,
       "requires": {
         "mcps": "at least one of: Slack, Discord, Jira, Gmail (OR none in local-file mode)",
         "setup": [
@@ -81,7 +109,13 @@
       "version": "1.0.0",
       "path": "downloads-triage.md",
       "category": "organization",
-      "tags": ["organization", "file-watcher", "downloads", "triage", "external-trigger"],
+      "tags": [
+        "organization",
+        "file-watcher",
+        "downloads",
+        "triage",
+        "external-trigger"
+      ],
       "one_line": "Fires when new files land in ~/Downloads. Categorizes and suggests destinations.",
       "schedule": "event-driven (file_added trigger, 60s quiet period, 5min debounce)",
       "cost_per_run_usd_approx": 0.04,
@@ -97,7 +131,14 @@
       "version": "1.0.0",
       "path": "workspace-cleanup.md",
       "category": "organization",
-      "tags": ["organization", "desktop", "files", "cleanup", "stale", "weekly"],
+      "tags": [
+        "organization",
+        "desktop",
+        "files",
+        "cleanup",
+        "stale",
+        "weekly"
+      ],
       "one_line": "Weekly scan of Desktop and Documents for stale files, generic names, and large files. Report only.",
       "schedule": "Sundays at 17:00 UTC",
       "cost_per_run_usd_approx": 0.04,
@@ -113,12 +154,16 @@
       "version": "1.0.0",
       "path": "module-demo/",
       "category": "example",
-      "tags": ["example", "module", "reference"],
+      "tags": [
+        "example",
+        "module",
+        "reference"
+      ],
       "one_line": "Reference module-format marketplace job. Demonstrates the <name>/JOB.md directory shape for multi-file jobs.",
       "schedule": "ad-hoc only",
       "cost_per_run_usd_approx": 0.01,
       "runs_per_month_approx": 0,
-      "monthly_cost_usd_approx": 0.00,
+      "monthly_cost_usd_approx": 0.0,
       "requires": {
         "mcps": "none",
         "setup": [
@@ -132,7 +177,15 @@
       "version": "1.0.0",
       "path": "event-monitor.md",
       "category": "monitoring",
-      "tags": ["monitoring", "health-check", "temporary", "on-call", "deployment", "event", "time-bounded"],
+      "tags": [
+        "monitoring",
+        "health-check",
+        "temporary",
+        "on-call",
+        "deployment",
+        "event",
+        "time-bounded"
+      ],
       "one_line": "Time-bounded health checker: runs every 15 min inside a custom window, alerts on failure, auto-expires when done.",
       "schedule": "every 15 min within a configurable time window (auto-expires)",
       "cost_per_run_usd_approx": 0.04,
@@ -142,7 +195,7 @@
         "mcps": "none (local file fallback) or Slack (for push alerts)",
         "setup": [
           "Set valid_after to your window start (ISO 8601).",
-          "Set expires_after to your window end — job auto-disables when it passes.",
+          "Set expires_after to your window end \u2014 job auto-disables when it passes.",
           "Set HEALTH_URL input default to your endpoint.",
           "Optionally set ALERT_CHANNEL to a Slack DM or channel ID."
         ]
@@ -153,12 +206,19 @@
       "version": "1.0.0",
       "path": "git-commit-nudge.md",
       "category": "monitoring",
-      "tags": ["monitoring", "git", "uncommitted", "unpushed", "nudge", "developer"],
+      "tags": [
+        "monitoring",
+        "git",
+        "uncommitted",
+        "unpushed",
+        "nudge",
+        "developer"
+      ],
       "one_line": "Every 4 hours, check repos for uncommitted changes or unpushed commits. Nudge via local file.",
       "schedule": "every 4 hours",
       "cost_per_run_usd_approx": 0.04,
       "runs_per_month_approx": 180,
-      "monthly_cost_usd_approx": 7.20,
+      "monthly_cost_usd_approx": 7.2,
       "requires": {
         "mcps": "none",
         "setup": [
@@ -171,12 +231,17 @@
       "version": "1.0.0",
       "path": "dynamic-context-demo.md",
       "category": "example",
-      "tags": ["example", "templating", "demo", "reference"],
-      "one_line": "Reference job demonstrating {{cmd:}} inline bash templating — injects live date and git state into the prompt body.",
+      "tags": [
+        "example",
+        "templating",
+        "demo",
+        "reference"
+      ],
+      "one_line": "Reference job demonstrating {{cmd:}} inline bash templating \u2014 injects live date and git state into the prompt body.",
       "schedule": "ad-hoc only (customize cron to taste)",
       "cost_per_run_usd_approx": 0.01,
       "runs_per_month_approx": 0,
-      "monthly_cost_usd_approx": 0.00,
+      "monthly_cost_usd_approx": 0.0,
       "requires": {
         "mcps": "none",
         "setup": [
@@ -202,6 +267,105 @@
           "Set name: to something unique, e.g. gh-watch-123",
           "Set ISSUE_URL default to the GitHub issue URL to watch.",
           "Optionally set NOTIFY_CHANNEL to a Slack DM channel ID for push notifications."
+        ]
+      }
+    },
+    {
+      "name": "work-journal",
+      "path": "work-journal.md",
+      "category": "productivity",
+      "tags": [
+        "productivity",
+        "journal",
+        "developer",
+        "session-persist"
+      ],
+      "one_line": "Weekday end-of-day work journal from git activity \u2014 accumulates context across runs to surface patterns.",
+      "schedule": "weekdays at 22:00 UTC (configurable)",
+      "cost_per_run_usd_approx": 0.04,
+      "runs_per_month_approx": 22,
+      "monthly_cost_usd_approx": 0.88,
+      "feature_demo": "session_persist",
+      "requires": {
+        "mcps": "none",
+        "setup": [
+          "Set REPOS_ROOT to your git repos parent directory.",
+          "Optionally change OUTPUT_FILE path."
+        ]
+      }
+    },
+    {
+      "name": "release-monitor",
+      "path": "release-monitor.md",
+      "category": "monitoring",
+      "tags": [
+        "monitoring",
+        "github",
+        "temporal",
+        "release",
+        "bounded"
+      ],
+      "one_line": "Bounded post-release watcher \u2014 monitors a GitHub repo for new issues during a release window, then auto-disables.",
+      "schedule": "every 6 hours (configurable), bounded by valid_after + expires_after",
+      "cost_per_run_usd_approx": 0.12,
+      "runs_per_month_approx": "28 max (1 week)",
+      "monthly_cost_usd_approx": "~$3.36 max (auto-disables after window)",
+      "feature_demo": "valid_after + expires_after + max_runs",
+      "requires": {
+        "mcps": "none (uses gh CLI)",
+        "setup": [
+          "Set REPO to owner/repo format.",
+          "Set valid_after to your release date (YYYY-MM-DD).",
+          "Set expires_after to 7 days after release (YYYY-MM-DD)."
+        ]
+      }
+    },
+    {
+      "name": "standup-gather",
+      "path": "standup-gather.md",
+      "category": "developer",
+      "tags": [
+        "developer",
+        "pipeline",
+        "standup",
+        "pipeline-stage"
+      ],
+      "one_line": "Pipeline stage \u2014 collects git commits from the last 24h. Consumed by the standup job.",
+      "schedule": "ad-hoc only (pipeline stage; fired by standup job)",
+      "cost_per_run_usd_approx": 0.04,
+      "runs_per_month_approx": 22,
+      "monthly_cost_usd_approx": 0.88,
+      "feature_demo": "producers/consumers (pipeline stage)",
+      "requires": {
+        "mcps": "none",
+        "setup": [
+          "Set REPOS_ROOT to your git repos parent directory.",
+          "Install alongside standup.md \u2014 these two jobs form a pipeline."
+        ]
+      }
+    },
+    {
+      "name": "standup",
+      "path": "standup.md",
+      "category": "productivity",
+      "tags": [
+        "productivity",
+        "developer",
+        "pipeline",
+        "standup"
+      ],
+      "one_line": "Weekday standup generator \u2014 pulls git activity via the standup-gather pipeline and writes a formatted standup note.",
+      "schedule": "weekdays at 13:00 UTC (configurable)",
+      "cost_per_run_usd_approx": 0.08,
+      "runs_per_month_approx": 22,
+      "monthly_cost_usd_approx": 1.76,
+      "feature_demo": "producers/consumers (pipeline root)",
+      "requires": {
+        "mcps": "none",
+        "setup": [
+          "Install alongside standup-gather.md \u2014 these two jobs form a pipeline.",
+          "Set REPOS_ROOT in standup-gather.md.",
+          "Optionally change OUTPUT_FILE path."
         ]
       }
     }
