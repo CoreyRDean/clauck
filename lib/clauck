@@ -652,7 +652,7 @@ def cmd_marketplace(filter_tag: str = "") -> None:
     all_tags = set()
     for j in index.get("jobs", []):
         all_tags.update(j.get("tags", []))
-    print(f"\n  filter by tag: clauck marketplace <tag>")
+    print("\n  filter by tag: clauck marketplace <tag>")
     print(f"  tags: {', '.join(sorted(all_tags))}")
 
 
@@ -700,7 +700,7 @@ def cmd_install_marketplace(name: str, update: bool = False) -> None:
     print(f"  installed: {dst}")
     setup = job.get("requires", {}).get("setup", [])
     if setup:
-        print(f"  CUSTOMIZE BEFORE FIRST RUN:")
+        print("  CUSTOMIZE BEFORE FIRST RUN:")
         for step in setup:
             print(f"    - {step}")
     print(f"  test: clauck fire {name}")
@@ -813,7 +813,6 @@ def cmd_config(args: list[str]) -> None:
 
 def cmd_peek() -> None:
     """Live-tail all job + scheduler + DAG logs in a unified stream."""
-    import signal
 
     print("  clauck peek — live log stream (Ctrl+C to stop)\n")
 
@@ -900,7 +899,7 @@ def cmd_version() -> None:
     if source == "local":
         sha_str = f" @ {git_sha}" if git_sha else ""
         print(f"  source: local checkout{sha_str}")
-        print(f"  note:   update checks disabled for local builds")
+        print("  note:   update checks disabled for local builds")
     elif source == "nightly":
         sha_str = f" @ {git_sha}" if git_sha else ""
         print(f"  source: nightly{sha_str}")
@@ -1001,7 +1000,7 @@ def cmd_inspect(name: str) -> None:
     # Show triggers
     triggers = job.get("external_triggers", [])
     if triggers:
-        print(f"  External triggers:")
+        print("  External triggers:")
         for t in triggers:
             if isinstance(t, dict):
                 parts = [f"{k}={v}" for k, v in t.items()]
@@ -1011,14 +1010,14 @@ def cmd_inspect(name: str) -> None:
 
     hooks = job.get("semantic_hooks", [])
     if hooks:
-        print(f"  Semantic hooks:")
+        print("  Semantic hooks:")
         for h in hooks:
             print(f"    - {h}")
 
     # Show inputs
     inputs = job.get("inputs", [])
     if inputs:
-        print(f"  Inputs:")
+        print("  Inputs:")
         for inp in inputs:
             if isinstance(inp, dict):
                 iname = inp.get("name", "?")
@@ -1066,7 +1065,7 @@ def cmd_inspect(name: str) -> None:
         tree = build_tree(name, 0, {name})
 
         if tree:
-            print(f"\n  Producer DAG:")
+            print("\n  Producer DAG:")
             print(f"  {name}")
 
             # Group by parent for proper tree drawing
@@ -1198,7 +1197,7 @@ def cmd_inspect(name: str) -> None:
                         child_prefix = "" if node == "JOB.md" else prefix + ("   " if is_last else "│  ")
                         _render_internal_dag(child, child_prefix, child_is_last, seen)
 
-                print(f"\n  Internal stage DAG:")
+                print("\n  Internal stage DAG:")
                 _render_internal_dag("JOB.md", "", False, set())
 
     print()
