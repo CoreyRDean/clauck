@@ -4,6 +4,7 @@
   "jobs": [
     {
       "name": "morning-brief",
+      "version": "1.0.0",
       "path": "morning-brief.md",
       "category": "productivity",
       "tags": ["productivity", "digest", "daily", "slack", "calendar", "jira", "standup"],
@@ -22,6 +23,7 @@
     },
     {
       "name": "github-pr-digest",
+      "version": "1.0.0",
       "path": "github-pr-digest.md",
       "category": "productivity",
       "tags": ["productivity", "github", "pull-requests", "digest", "daily", "code-review"],
@@ -39,6 +41,7 @@
     },
     {
       "name": "inbox-zero-assist",
+      "version": "1.0.0",
       "path": "inbox-zero-assist.md",
       "category": "productivity",
       "tags": ["productivity", "gmail", "email", "triage", "inbox-zero", "daily"],
@@ -57,6 +60,7 @@
     },
     {
       "name": "daily-verify",
+      "version": "1.0.0",
       "path": "daily-verify.md",
       "category": "verification",
       "tags": ["verification", "health-check", "daily", "mcp", "notification"],
@@ -74,6 +78,7 @@
     },
     {
       "name": "downloads-triage",
+      "version": "1.0.0",
       "path": "downloads-triage.md",
       "category": "organization",
       "tags": ["organization", "file-watcher", "downloads", "triage", "external-trigger"],
@@ -89,6 +94,7 @@
     },
     {
       "name": "workspace-cleanup",
+      "version": "1.0.0",
       "path": "workspace-cleanup.md",
       "category": "organization",
       "tags": ["organization", "desktop", "files", "cleanup", "stale", "weekly"],
@@ -104,6 +110,7 @@
     },
     {
       "name": "git-commit-nudge",
+      "version": "1.0.0",
       "path": "git-commit-nudge.md",
       "category": "monitoring",
       "tags": ["monitoring", "git", "uncommitted", "unpushed", "nudge", "developer"],

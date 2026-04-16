@@ -1,5 +1,6 @@
 ---
 name: github-pr-digest
+version: "1.0.0"
 description: Weekday digest of PRs needing your attention — reviews requested, your stale drafts, and recently merged.
 cron: "0 14 * * 1-5"
 max_turns: 8

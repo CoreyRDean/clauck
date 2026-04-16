@@ -1,5 +1,6 @@
 ---
 name: workspace-cleanup
+version: "1.0.0"
 description: Weekly scan of Desktop and Documents for stale files, generic names, and clutter. Report only — never deletes.
 cron: "0 17 * * 0"
 max_turns: 5

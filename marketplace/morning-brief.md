@@ -1,5 +1,6 @@
 ---
 name: morning-brief
+version: "1.0.0"
 description: Weekday morning digest — unread Slack mentions, today's calendar, and open tickets in one threaded post.
 cron: "0 13 * * 1-5"
 max_turns: 12

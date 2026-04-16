@@ -1,5 +1,6 @@
 ---
 name: downloads-triage
+version: "1.0.0"
 description: When new files land in ~/Downloads, categorize them and log a brief summary. Demonstrates file_added external triggers.
 max_turns: 6
 max_budget_usd: 0.15
