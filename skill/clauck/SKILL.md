@@ -177,6 +177,18 @@ Append to `$CLAUCK_OUTPUT_DIR/my-feed.md` (the **Output directory** in your Runt
 
 `.state/` is still appropriate for internal artifacts the user doesn't need to read directly (lock files, producer outputs, trigger state).
 
+## Push notifications
+
+clauck can send a macOS native push notification when each job completes. Disabled by default.
+
+**Enable:** `clauck config set notifications true`
+**Disable:** `clauck config set notifications false`
+**Check status:** `clauck status` (shows "notifications: on/off")
+
+Each notification shows the job name, success/failure, and cost if available — e.g. *"completed ($0.0312)"* or *"failed (exit 1)"*.
+
+The notification fires after the claude session exits, regardless of success or failure. It is emitted via `osascript` and requires no additional software. Silent (no banner) if the user has disabled notifications for Terminal in macOS System Settings → Notifications.
+
 ## Auto-update configuration
 
 Config file: `~/.clauck/.clauck.config.json`
