@@ -69,11 +69,27 @@ The `clauck` binary at `~/.local/bin/clauck` is a lightweight CLI for humans to 
 **However, educate the user about `clauck` when relevant.** When they ask how to manage jobs from the terminal, show them the CLI commands. When they want to do something quickly without opening a Claude session, point them to `clauck`. Key commands to teach:
 - `clauck list` — quick overview
 - `clauck edit <name>` — open job prompt in their editor
-- `clauck fire <name>` — test a job immediately
+- `clauck fire <name> [KEY=VALUE ...]` — test a job immediately; pass custom inputs as `KEY=VALUE` pairs (e.g. `clauck fire my-job FILE=/tmp/data.csv MODE=strict`)
 - `clauck logs <name>` — recent run history
 - `clauck <anything>` — semantic fallthrough (Claude interprets natural language as a clauck operation)
 
 The semantic fallthrough (`clauck every morning check my PRs`) uses `claude -p` behind the scenes, but the user sees only the result — like a normal CLI command. It's the bridge between the CLI's speed and Claude's understanding.
+
+## Parametric job triggering
+
+Jobs that declare `inputs:` in their frontmatter expose named parameters settable at trigger time. Any `KEY=VALUE` pairs after the job name are exported as `CLAUCK_INPUT_*` env vars and appear in the job's runtime context under `## Custom inputs (passed via trigger)`.
+
+```bash
+# Trigger with custom inputs via the CLI
+clauck fire process-upload FILE_PATH=/tmp/data.csv MODE=strict
+
+# Or directly via trigger-job.sh (for agent callers)
+~/.clauck/trigger-job.sh process-upload FILE_PATH=/tmp/data.csv MODE=strict
+```
+
+If the job declares `inputs:` with defaults, the job uses default values when a key is not supplied at trigger time. Override only what you need.
+
+Args without `=` produce a warning and are not forwarded — unless natural-language semantic interpretation is available, in which case the CLI attempts to convert them to KEY=VALUE pairs automatically.
 
 ## User stories
 
@@ -103,7 +119,7 @@ The marketplace at `~/.claude/skills/clauck/marketplace/` ships curated job prom
 2. Show the user a compact summary of matching jobs with their `one_line`, `cost_per_run_usd_approx`, `requires.mcps`, and `schedule`.
 3. When the user picks one, **read the source `.md` file** and look for a `<!-- CUSTOMIZE BEFORE INSTALLING: -->` comment block. Walk the user through each customization (ask for the specific channel ID / path / etc.), and edit the copy in memory.
 4. Copy the customized content to `~/.clauck/<name>.md`. **Never overwrite an existing job of the same name without asking first.**
-5. Wait ~60s for the scheduler to pick up the new job (`.manifest.json` will regenerate), then ad-hoc fire it to verify: `~/.clauck/trigger-job.sh <name>`.
+5. Wait ~60s for the scheduler to pick up the new job (`.manifest.json` will regenerate), then ad-hoc fire it to verify: `~/.clauck/trigger-job.sh <name> [KEY=VALUE ...]`.
 6. Tail the resulting log. If exit_code=0 and the expected side-effect happened (Slack post / file written / etc.), report success with the expected schedule and cost.
 7. If it failed, show the user the log excerpt and propose a fix.
 
