@@ -60,7 +60,7 @@ def _open_dispatch_log():
 
 
 # Files with these stems are skipped even if they live in jobs dir.
-RESERVED_STEMS = {"scheduler", "run-job", "trigger-job", "update-check"}
+RESERVED_STEMS = {"scheduler", "run-job", "trigger-job", "update-check", "prompt"}
 
 
 # ---------- frontmatter ----------
