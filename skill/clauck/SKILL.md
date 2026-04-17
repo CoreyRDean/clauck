@@ -71,7 +71,8 @@ The `clauck` binary at `~/.local/bin/clauck` is a lightweight CLI for humans to 
 - `clauck list` — quick overview
 - `clauck edit <name>` — open job prompt in their editor
 - `clauck fire <name> [KEY=VALUE ...]` — test a job immediately; pass custom inputs as `KEY=VALUE` pairs (e.g. `clauck fire my-job FILE=/tmp/data.csv MODE=strict`)
-- `clauck logs <name>` — recent run history
+- `clauck logs <name>` — recent run history (marks `[active]` if a run is in progress)
+- `clauck logs <name> --follow` — tail the active run live; falls back to most recent log if idle
 - `clauck <anything>` — semantic fallthrough (Claude interprets natural language as a clauck operation)
 
 The semantic fallthrough (`clauck every morning check my PRs`) uses `claude -p` behind the scenes, but the user sees only the result — like a normal CLI command. It's the bridge between the CLI's speed and Claude's understanding.
@@ -759,8 +760,8 @@ launchctl list | grep claude-scheduler
 # Recent fires:
 tail -f ~/.clauck/.scheduler-stdout.log
 
-# Latest run for a specific job:
-ls -t ~/.clauck/<name>-*.log | head -1 | xargs tail
+# Latest run for a specific job (or tail the active run):
+clauck logs <name> --follow
 
 # Dry-run discovery without firing:
 /usr/bin/python3 ~/.clauck/scheduler.py --list
