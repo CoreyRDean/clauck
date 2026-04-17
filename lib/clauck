@@ -647,7 +647,7 @@ def cmd_marketplace(filter_tag: str = "") -> None:
         if category not in seen_categories:
             seen_categories.add(category)
             print(f"\n  [{category}]")
-        installed = _installed_job_path(j["name"]).exists()
+        installed = _installed_job_path(j["name"]) is not None
         marker = " [installed]" if installed else ""
         cost = j.get("cost_per_run_usd_approx", "?")
         print(f"    {j['name']:<23} ~${cost}/run  {j.get('schedule', '')}{marker}")
@@ -661,10 +661,12 @@ def cmd_marketplace(filter_tag: str = "") -> None:
     print(f"  tags: {', '.join(sorted(all_tags))}")
 
 
-def _installed_job_path(name: str) -> Path:
+def _installed_job_path(name: str) -> "Path | None":
     """Return the installed job's .md path (flat <name>.md or module <name>/JOB.md).
 
-    Returns an empty Path() if neither exists; callers should check with .exists().
+    Returns None if neither exists. Callers should check `is not None` rather
+    than `.exists()` — an empty Path() resolves to the current directory, which
+    always exists and would produce false positives for uninstalled jobs.
     """
     flat = JOBS_DIR / f"{name}.md"
     if flat.exists():
@@ -672,7 +674,7 @@ def _installed_job_path(name: str) -> Path:
     module_entry = JOBS_DIR / name / "JOB.md"
     if module_entry.exists():
         return module_entry
-    return Path()
+    return None
 
 
 def cmd_marketplace_info(name: str) -> None:
@@ -688,8 +690,8 @@ def cmd_marketplace_info(name: str) -> None:
 
     catalog_ver = j.get("version", "")
     dst = _installed_job_path(j["name"])
-    installed = dst.exists()
-    installed_ver = _parse_frontmatter_version(dst) if installed else ""
+    installed = dst is not None
+    installed_ver = _parse_frontmatter_version(dst) if dst is not None else ""
     update_available = installed and catalog_ver and installed_ver != catalog_ver
 
     ver_str = f"  (v{catalog_ver})" if catalog_ver else ""
@@ -748,7 +750,7 @@ def cmd_marketplace_search(query: str) -> None:
         return
     print(f"  {len(jobs)} result(s) for '{query}':\n")
     for j in jobs:
-        installed = _installed_job_path(j["name"]).exists()
+        installed = _installed_job_path(j["name"]) is not None
         marker = " [installed]" if installed else ""
         cost = j.get("cost_per_run_usd_approx", "?")
         print(f"    {j['name']:<23} ~${cost}/run  {j.get('schedule', '')}{marker}")
@@ -836,7 +838,7 @@ def cmd_marketplace_updates() -> None:
         jname = job["name"]
         catalog_ver = job.get("version", "")
         dst = _installed_job_path(jname)
-        if not dst.exists():
+        if dst is None:
             continue
         if not catalog_ver:
             not_versioned.append(jname)
