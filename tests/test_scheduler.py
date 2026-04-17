@@ -5,10 +5,15 @@ Run: python3 -m unittest discover tests
 
 from __future__ import annotations
 
+import os
+import shutil
 import sys
+import tempfile
+import time as time_module
 import unittest
 from datetime import datetime, timezone
 from pathlib import Path
+from unittest.mock import MagicMock, patch
 
 # Make lib/ importable without installing anything
 sys.path.insert(0, str(Path(__file__).parent.parent / "lib"))
@@ -441,6 +446,282 @@ class TestCronEdgeCases(unittest.TestCase):
         # Feb 29 on a leap year
         dt = datetime(2024, 2, 29, 12, 0, tzinfo=timezone.utc)
         self.assertTrue(scheduler.cron_matches("0 12 29 2 *", dt))
+
+
+# ---------------------------------------------------------------------------
+# _eval_file_changed
+# ---------------------------------------------------------------------------
+
+
+class TestEvalFileChanged(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.NamedTemporaryFile(delete=False)
+        self.tmp.close()
+        self.path = self.tmp.name
+
+    def tearDown(self):
+        try:
+            os.unlink(self.path)
+        except OSError:
+            pass
+
+    def _trig(self):
+        return {"type": "file_changed", "path": self.path}
+
+    def test_bootstrap(self):
+        mtime = os.path.getmtime(self.path)
+        new_state, fired = scheduler._eval_file_changed(self._trig(), None)
+        self.assertAlmostEqual(new_state["last_mtime"], mtime, places=3)
+        self.assertFalse(fired)
+
+    def test_same_mtime_no_fire(self):
+        mtime = os.path.getmtime(self.path)
+        state = {"last_mtime": mtime}
+        _, fired = scheduler._eval_file_changed(self._trig(), state)
+        self.assertFalse(fired)
+
+    def test_mtime_advanced_fires(self):
+        old_mtime = os.path.getmtime(self.path)
+        os.utime(self.path, (old_mtime + 10, old_mtime + 10))
+        state = {"last_mtime": old_mtime}
+        new_state, fired = scheduler._eval_file_changed(self._trig(), state)
+        self.assertTrue(fired)
+        self.assertGreater(new_state["last_mtime"], old_mtime)
+
+    def test_missing_path_raises(self):
+        trig = {"type": "file_changed", "path": "/nonexistent/__no_such_file__.txt"}
+        with self.assertRaises(FileNotFoundError):
+            scheduler._eval_file_changed(trig, None)
+
+
+# ---------------------------------------------------------------------------
+# _eval_file_added
+# ---------------------------------------------------------------------------
+
+
+class TestEvalFileAdded(unittest.TestCase):
+    def setUp(self):
+        self.tmpdir = tempfile.mkdtemp()
+
+    def tearDown(self):
+        shutil.rmtree(self.tmpdir, ignore_errors=True)
+
+    def _trig(self, **kwargs):
+        t = {"type": "file_added", "path": self.tmpdir, "glob": "*.txt"}
+        t.update(kwargs)
+        return t
+
+    def _touch(self, name):
+        open(os.path.join(self.tmpdir, name), "w").close()
+
+    def test_bootstrap_empty_dir(self):
+        new_state, fired = scheduler._eval_file_added(self._trig(), None)
+        self.assertFalse(fired)
+        self.assertEqual(new_state["seen_files"], [])
+        self.assertFalse(new_state["pending_burst"])
+
+    def test_bootstrap_with_existing_files(self):
+        self._touch("existing.txt")
+        new_state, fired = scheduler._eval_file_added(self._trig(), None)
+        self.assertFalse(fired)
+        self.assertIn("existing.txt", new_state["seen_files"])
+
+    def test_no_new_files_no_fire(self):
+        self._touch("old.txt")
+        state = {"seen_files": ["old.txt"], "pending_burst": False, "last_change_at": None}
+        new_state, fired = scheduler._eval_file_added(self._trig(), state)
+        self.assertFalse(fired)
+        self.assertFalse(new_state["pending_burst"])
+
+    def test_new_file_starts_pending_burst(self):
+        state = {"seen_files": [], "pending_burst": False, "last_change_at": None}
+        self._touch("new.txt")
+        new_state, fired = scheduler._eval_file_added(self._trig(), state)
+        self.assertFalse(fired)
+        self.assertTrue(new_state["pending_burst"])
+        self.assertIn("new.txt", new_state["seen_files"])
+
+    def test_quiet_period_elapsed_fires(self):
+        self._touch("file.txt")
+        state = {"seen_files": ["file.txt"], "pending_burst": True, "last_change_at": 1}
+        new_state, fired = scheduler._eval_file_added(self._trig(quiet_seconds=0), state)
+        self.assertTrue(fired)
+        self.assertFalse(new_state["pending_burst"])
+        self.assertIsNone(new_state["last_change_at"])
+
+    def test_pending_burst_quiet_not_elapsed(self):
+        self._touch("file.txt")
+        state = {
+            "seen_files": ["file.txt"],
+            "pending_burst": True,
+            "last_change_at": time_module.time(),
+        }
+        new_state, fired = scheduler._eval_file_added(self._trig(quiet_seconds=60), state)
+        self.assertFalse(fired)
+        self.assertTrue(new_state["pending_burst"])
+
+    def test_removed_file_can_refire(self):
+        # Full lifecycle: add file → delete it → re-add → burst fires again.
+        # Tick 1: file present in both seen and current — no burst.
+        self._touch("cycle.txt")
+        state = {"seen_files": ["cycle.txt"], "pending_burst": False, "last_change_at": None}
+        state1, _ = scheduler._eval_file_added(self._trig(), state)
+        self.assertFalse(state1["pending_burst"])
+        # Tick 2: file deleted — seen &= current strips it from seen.
+        os.unlink(os.path.join(self.tmpdir, "cycle.txt"))
+        state2, _ = scheduler._eval_file_added(self._trig(), state1)
+        self.assertNotIn("cycle.txt", state2["seen_files"])
+        # Tick 3: file re-added — detected as new, burst starts.
+        self._touch("cycle.txt")
+        state3, fired3 = scheduler._eval_file_added(self._trig(), state2)
+        self.assertFalse(fired3)
+        self.assertTrue(state3["pending_burst"])
+        self.assertIn("cycle.txt", state3["seen_files"])
+
+    def test_glob_filters_non_matching_files(self):
+        self._touch("script.py")
+        state = {"seen_files": [], "pending_burst": False, "last_change_at": None}
+        new_state, fired = scheduler._eval_file_added(self._trig(), state)
+        self.assertFalse(new_state["pending_burst"])
+
+    def test_invalid_path_raises(self):
+        trig = {"type": "file_added", "path": "/nonexistent/__no_such_dir__"}
+        with self.assertRaises(FileNotFoundError):
+            scheduler._eval_file_added(trig, None)
+
+
+# ---------------------------------------------------------------------------
+# _eval_process_starts
+# ---------------------------------------------------------------------------
+
+
+class TestEvalProcessStarts(unittest.TestCase):
+    def _trig(self):
+        return {"type": "process_starts", "match": "MyTestApp"}
+
+    @patch("scheduler.subprocess.run")
+    def test_bootstrap_not_running(self, mock_run):
+        mock_run.return_value = MagicMock(returncode=1)
+        new_state, fired = scheduler._eval_process_starts(self._trig(), None)
+        self.assertFalse(new_state["was_running"])
+        self.assertFalse(fired)
+
+    @patch("scheduler.subprocess.run")
+    def test_bootstrap_already_running(self, mock_run):
+        mock_run.return_value = MagicMock(returncode=0)
+        new_state, fired = scheduler._eval_process_starts(self._trig(), None)
+        self.assertTrue(new_state["was_running"])
+        self.assertFalse(fired)
+
+    @patch("scheduler.subprocess.run")
+    def test_transition_starts_fires(self, mock_run):
+        mock_run.return_value = MagicMock(returncode=0)
+        new_state, fired = scheduler._eval_process_starts(self._trig(), {"was_running": False})
+        self.assertTrue(fired)
+        self.assertTrue(new_state["was_running"])
+
+    @patch("scheduler.subprocess.run")
+    def test_already_running_no_fire(self, mock_run):
+        mock_run.return_value = MagicMock(returncode=0)
+        _, fired = scheduler._eval_process_starts(self._trig(), {"was_running": True})
+        self.assertFalse(fired)
+
+    @patch("scheduler.subprocess.run")
+    def test_stops_no_fire(self, mock_run):
+        mock_run.return_value = MagicMock(returncode=1)
+        new_state, fired = scheduler._eval_process_starts(self._trig(), {"was_running": True})
+        self.assertFalse(fired)
+        self.assertFalse(new_state["was_running"])
+
+    def test_missing_match_raises(self):
+        trig = {"type": "process_starts", "match": ""}
+        with self.assertRaises(ValueError):
+            scheduler._eval_process_starts(trig, None)
+
+
+# ---------------------------------------------------------------------------
+# _eval_command_succeeds
+# ---------------------------------------------------------------------------
+
+
+class TestEvalCommandSucceeds(unittest.TestCase):
+    def _trig(self):
+        return {"type": "command_succeeds", "run": "true"}
+
+    @patch("scheduler.subprocess.run")
+    def test_bootstrap_succeeds(self, mock_run):
+        mock_run.return_value = MagicMock(returncode=0)
+        new_state, fired = scheduler._eval_command_succeeds(self._trig(), None)
+        self.assertTrue(new_state["was_succeeding"])
+        self.assertFalse(fired)
+
+    @patch("scheduler.subprocess.run")
+    def test_bootstrap_fails(self, mock_run):
+        mock_run.return_value = MagicMock(returncode=1)
+        new_state, fired = scheduler._eval_command_succeeds(self._trig(), None)
+        self.assertFalse(new_state["was_succeeding"])
+        self.assertFalse(fired)
+
+    @patch("scheduler.subprocess.run")
+    def test_fail_to_succeed_fires(self, mock_run):
+        mock_run.return_value = MagicMock(returncode=0)
+        new_state, fired = scheduler._eval_command_succeeds(self._trig(), {"was_succeeding": False})
+        self.assertTrue(fired)
+        self.assertTrue(new_state["was_succeeding"])
+
+    @patch("scheduler.subprocess.run")
+    def test_succeed_to_succeed_no_fire(self, mock_run):
+        mock_run.return_value = MagicMock(returncode=0)
+        _, fired = scheduler._eval_command_succeeds(self._trig(), {"was_succeeding": True})
+        self.assertFalse(fired)
+
+    @patch("scheduler.subprocess.run")
+    def test_succeed_to_fail_no_fire(self, mock_run):
+        mock_run.return_value = MagicMock(returncode=1)
+        new_state, fired = scheduler._eval_command_succeeds(self._trig(), {"was_succeeding": True})
+        self.assertFalse(fired)
+        self.assertFalse(new_state["was_succeeding"])
+
+    def test_missing_run_raises(self):
+        trig = {"type": "command_succeeds", "run": ""}
+        with self.assertRaises(ValueError):
+            scheduler._eval_command_succeeds(trig, None)
+
+
+# ---------------------------------------------------------------------------
+# _evaluate_trigger (dispatch)
+# ---------------------------------------------------------------------------
+
+
+class TestEvaluateTrigger(unittest.TestCase):
+    @patch("scheduler._eval_file_added", return_value=({"k": "v"}, True))
+    def test_dispatches_file_added(self, mock_fn):
+        trig = {"type": "file_added", "path": "/tmp"}
+        result = scheduler._evaluate_trigger(trig, None)
+        mock_fn.assert_called_once_with(trig, None)
+        self.assertEqual(result, ({"k": "v"}, True))
+
+    @patch("scheduler._eval_file_changed", return_value=({"k": "v"}, False))
+    def test_dispatches_file_changed(self, mock_fn):
+        trig = {"type": "file_changed", "path": "/tmp/f"}
+        scheduler._evaluate_trigger(trig, None)
+        mock_fn.assert_called_once_with(trig, None)
+
+    @patch("scheduler._eval_process_starts", return_value=({"was_running": False}, False))
+    def test_dispatches_process_starts(self, mock_fn):
+        trig = {"type": "process_starts", "match": "app"}
+        scheduler._evaluate_trigger(trig, None)
+        mock_fn.assert_called_once_with(trig, None)
+
+    @patch("scheduler._eval_command_succeeds", return_value=({"was_succeeding": False}, False))
+    def test_dispatches_command_succeeds(self, mock_fn):
+        trig = {"type": "command_succeeds", "run": "true"}
+        scheduler._evaluate_trigger(trig, None)
+        mock_fn.assert_called_once_with(trig, None)
+
+    def test_unknown_type_raises(self):
+        with self.assertRaises(ValueError):
+            scheduler._evaluate_trigger({"type": "nonexistent_type"}, None)
 
 
 if __name__ == "__main__":
