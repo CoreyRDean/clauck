@@ -146,6 +146,35 @@ echo $$ > "$LOCK_DIR/pid"
 trap 'rm -rf "$LOCK_DIR"' EXIT
 date +%s > "$LAST_START_FILE"
 
+# --- Revive override: consume session/budget overrides written by `clauck revive` ---
+# The file is single-use: read once, deleted immediately after the lock is held.
+# This overrides MAX_TURNS and MAX_BUDGET_USD from the job frontmatter and injects
+# --resume <session_id> so claude picks up the tripped session non-interactively.
+REVIVE_SESSION_ID=""
+REVIVE_CONSUMERS=""
+REVIVE_FILE="$STATE_DIR/${JOB_NAME}.revive.json"
+if [ -f "$REVIVE_FILE" ]; then
+  _REVIVE_DATA="$(/usr/bin/python3 -c "
+import json, sys
+try:
+    d = json.load(open(sys.argv[1]))
+    print(d.get('session_id', ''))
+    print(d.get('max_budget_usd', ''))
+    print(d.get('max_turns', ''))
+    print(' '.join(str(c) for c in d.get('consumers', [])))
+except Exception:
+    print(''); print(''); print(''); print('')
+" "$REVIVE_FILE" 2>/dev/null || true)"
+  rm -f "$REVIVE_FILE"
+  REVIVE_SESSION_ID="$(printf '%s\n' "$_REVIVE_DATA" | sed -n '1p')"
+  _REVIVE_BUDGET="$(printf '%s\n' "$_REVIVE_DATA" | sed -n '2p')"
+  _REVIVE_TURNS="$(printf '%s\n' "$_REVIVE_DATA" | sed -n '3p')"
+  REVIVE_CONSUMERS="$(printf '%s\n' "$_REVIVE_DATA" | sed -n '4p')"
+  [ -n "$_REVIVE_BUDGET" ] && MAX_BUDGET_USD="$_REVIVE_BUDGET"
+  [ -n "$_REVIVE_TURNS" ]  && MAX_TURNS="$_REVIVE_TURNS"
+  echo "stage=revive_override session_id=$REVIVE_SESSION_ID max_budget_usd=$MAX_BUDGET_USD max_turns=$MAX_TURNS consumers=$REVIVE_CONSUMERS" >> "$LOG_FILE"
+fi
+
 [ -f "$PROMPT_FILE" ]   || die "prompt file not found: $PROMPT_FILE" 3
 [ -f "$GLOBAL_PROMPT" ] || die "global prompt not found: $GLOBAL_PROMPT" 4
 
@@ -436,6 +465,9 @@ if [ "${CLAUDE_JOB_STRICT_MCP_CONFIG:-}" = "1" ]; then
   CLAUDE_ARGS+=(--strict-mcp-config --mcp-config "$EMPTY_MCP_CONFIG")
 fi
 
+# --- Revive: inject --resume to continue the tripped session non-interactively ---
+[ -n "${REVIVE_SESSION_ID:-}" ] && CLAUDE_ARGS+=(--resume "$REVIVE_SESSION_ID")
+
 # --- Session persistence: reuse the same session across runs ---
 # On first run, we capture session_id from the JSON output and store it.
 # On subsequent runs, we pass --resume <session_id> so claude has context
@@ -507,6 +539,17 @@ if [ "${CLAUDE_JOB_INTERACTIVE:-}" = "1" ] && [ "$EXIT_CODE" -eq 0 ]; then
 fi
 
 echo "--- exit_code=$EXIT_CODE ===" >> "$LOG_FILE"
+
+# --- Revive: trigger downstream consumers when the revived job completes successfully ---
+# For pipeline nodes, this chains the pipeline forward without re-running producers.
+# Consumers with their own `producers:` declarations will re-run those stages; consumers
+# without producer dependencies fire directly. This covers the common case (root→leaf pipelines).
+if [ "$EXIT_CODE" -eq 0 ] && [ -n "${REVIVE_CONSUMERS:-}" ]; then
+  for _CONSUMER in ${=REVIVE_CONSUMERS}; do
+    echo "stage=revive_trigger_consumer job=$_CONSUMER" >> "$LOG_FILE"
+    CLAUDE_JOB_TRIGGER="revive-continuation" "$JOBS_DIR/trigger-job.sh" "$_CONSUMER" &
+  done
+fi
 
 # --- Circuit-breaker tombstone: capture session on budget/turn exhaustion ---
 # If the job tripped max_budget or max_turns, write a tombstone so the user can
