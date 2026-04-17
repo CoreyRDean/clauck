@@ -714,7 +714,7 @@ def cmd_marketplace_info(name: str) -> None:
         print(f"  requires:  {mcps}")
     setup = requires.get("setup", [])
     if setup:
-        print(f"  customize:")
+        print("  customize:")
         for step in setup:
             print(f"    - {step}")
     if installed:
@@ -747,7 +747,7 @@ def cmd_marketplace_search(query: str) -> None:
         all_tags: set = set()
         for j in index.get("jobs", []):
             all_tags.update(j.get("tags", []))
-        print(f"  browse by tag: clauck marketplace <tag>")
+        print("  browse by tag: clauck marketplace <tag>")
         print(f"  tags: {', '.join(sorted(all_tags))}")
         return
     print(f"  {len(jobs)} result(s) for '{query}':\n")
@@ -757,7 +757,7 @@ def cmd_marketplace_search(query: str) -> None:
         cost = j.get("cost_per_run_usd_approx", "?")
         print(f"    {j['name']:<23} ~${cost}/run  {j.get('schedule', '')}{marker}")
         print(f"      {j.get('one_line', '')}")
-    print(f"\n  details: clauck marketplace info <name>")
+    print("\n  details: clauck marketplace info <name>")
 
 
 def _parse_frontmatter_version(path: Path) -> str:
