@@ -29,6 +29,7 @@ REPO_BRANCH="${CLAUCK_BRANCH:-main}"
 
 DRY_RUN=0
 AUTO_YES=0
+NO_MCP=0
 # Channel: stable (default), nightly, or local. When installing from a local
 # checkout, auto-overridden to "local" unless the user explicitly passed one.
 # "local" installs don't participate in the auto-update flow — treating a
@@ -40,6 +41,7 @@ for arg in "$@"; do
     case "$arg" in
         --dry-run)  DRY_RUN=1 ;;
         --yes|-y)   AUTO_YES=1 ;;
+        --no-mcp)   NO_MCP=1 ;;
         --channel=*)
             CHANNEL="${arg#--channel=}"
             CHANNEL_EXPLICIT=1
@@ -50,13 +52,16 @@ for arg in "$@"; do
             ;;
         --help|-h)
             cat <<HELP
-Usage: install.sh [--dry-run] [--yes] [--channel=stable|nightly|local]
+Usage: install.sh [--dry-run] [--yes] [--channel=stable|nightly|local] [--no-mcp]
 
   --dry-run          Show what would be done without writing any files.
   --yes              Accept all defaults without prompting (for automation).
   --channel=<name>   Update channel: stable (default), nightly, or local.
                      When installing from a local checkout, defaults to "local"
                      unless this flag is explicitly set.
+  --no-mcp           Skip auto-registering the MCP server in Claude Desktop and
+                     Claude Code. Persisted in config; use 'clauck mcp --install'
+                     to register manually later.
 
 Environment variables:
   CLAUCK_REPO     Git clone URL (default: $REPO_URL)
@@ -546,6 +551,44 @@ EOF
 }
 
 # ──────────────────────────────────────────────────────────────────────────
+# MCP server registration (Claude Desktop + Claude Code)
+# ──────────────────────────────────────────────────────────────────────────
+
+install_mcp() {
+    section "Registering MCP server"
+
+    local clauck_bin="$HOME/.local/bin/clauck"
+    if [ ! -x "$clauck_bin" ]; then
+        warn "clauck CLI not found at $clauck_bin — skipping MCP registration"
+        return 0
+    fi
+
+    if [ "$NO_MCP" -eq 1 ]; then
+        # Persist the opt-out so update-check.sh --apply (which re-runs install.sh)
+        # also skips it on future updates.
+        local cfg_dst="$HOME/.clauck/.clauck.config.json"
+        if [ "$DRY_RUN" -eq 0 ] && [ -f "$cfg_dst" ]; then
+            /usr/bin/python3 - "$cfg_dst" <<'EOF'
+import json, sys, pathlib
+p = pathlib.Path(sys.argv[1])
+d = json.loads(p.read_text()) if p.exists() else {}
+d["no_mcp_install"] = True
+p.write_text(json.dumps(d, indent=2) + "\n")
+EOF
+        fi
+        ok "MCP registration skipped (--no-mcp); use 'clauck mcp --install' to register later"
+        return 0
+    fi
+
+    if [ "$DRY_RUN" -eq 1 ]; then
+        ok "[dry-run] would run: clauck mcp --install"
+        return 0
+    fi
+
+    "$clauck_bin" mcp --install 2>&1 | sed 's/^/  /' || warn "MCP install step reported an error (non-fatal)"
+}
+
+# ──────────────────────────────────────────────────────────────────────────
 # Verification: fire heartbeat, wait for exit_code=0 in the log
 # ──────────────────────────────────────────────────────────────────────────
 
@@ -716,6 +759,7 @@ ${C_BOLD}This installer will:${C_RESET}
   ${C_DIM}opt ${C_RESET}  Install a Claude Code skill at ~/.claude/skills/clauck/
   ${C_DIM}opt ${C_RESET}  Install a pre-made job marketplace at ~/.claude/skills/clauck/marketplace/
   ${C_DIM}opt ${C_RESET}  Register a SessionStart hook in ~/.claude/settings.json
+  ${C_DIM}opt ${C_RESET}  Register the MCP server in Claude Desktop and Claude Code (skip with --no-mcp)
   ${C_DIM}opt ${C_RESET}  Install the 'heartbeat' job (~\$1/month on Haiku)${legacy_note}
 
   Source: ${REPO_URL}${version}
@@ -777,6 +821,7 @@ main() {
     install_files "$repo" "$install_source"
     install_plist "$repo"
     patch_settings
+    install_mcp
     verify
     banner
     star_prompt
