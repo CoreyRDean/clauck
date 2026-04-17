@@ -14,15 +14,19 @@
 
 ## Harness compatibility
 
-**clauck is designed for the Claude Code CLI (`claude` command-line tool).** It invokes `claude -p` for non-interactive job execution.
+There are two independent axes here, often confused. `INTENT.md §6` covers both.
 
-| Harness | Support level |
+**Axis 1 — which harness runs *clauck jobs*.** At v1, Claude CLI (`claude -p`) is the only supported job runner. Alternative runners (Codex, Cursor, Aider via a per-job `harness:` field) are **deferred** — consistent with the contract, not prioritized, revisited when a concrete second-harness need exists. Not a promise; not a rejection.
+
+**Axis 2 — which harness an *agent* is running in when they interact with clauck.** This is unrelated to Axis 1. Any harness that can speak MCP (via `clauck mcp`) or shell out to the CLI can drive clauck. This is supported now and is a stable interface per `INTENT.md §3` non-negotiable #8.
+
+| Harness | Can agents in this harness drive clauck? (Axis 2) |
 |---|---|
-| **Claude Code CLI** | Full support. First-class citizen. All features work. |
-| Claude Desktop (Chat) | Can answer questions about clauck, browse the marketplace, contribute to the repo. Cannot install, schedule, or run jobs. |
-| Claude Desktop (CoWork) | Can potentially install via Bash, modify job files. Cannot create persistent scheduled sessions. |
-| Claude Code (Cloud) | No local filesystem access. Cannot run clauck. |
-| Codex, Cursor, Aider | Planned alternative harness support (per-job `harness:` field). Not yet implemented. |
+| **Claude Code CLI** | Yes. Full support. Primary interaction surface. |
+| Claude Desktop (Chat) | Partial. Can answer questions, browse marketplace, contribute to repo. Cannot fire jobs without Bash-capable context. |
+| Claude Desktop (CoWork) | Partial. Can install via Bash, modify job files. Cannot establish a persistent scheduler on the user's Mac. |
+| Claude Code (Cloud) | No. Lacks local filesystem and launchd access. |
+| Codex, Cursor, Aider, any MCP-capable agent | Yes once `clauck mcp` (#34) is stable. Today, only via CLI shell-out. |
 
 If you're running in a non-CLI harness: be upfront with the user about what you can and can't do. Satisfy their intent as far as the harness allows. Point them to the CLI for full functionality.
 
