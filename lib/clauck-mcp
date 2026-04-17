@@ -1,0 +1,237 @@
+#!/usr/bin/env python3
+"""clauck MCP server — expose clauck jobs as tools over the MCP stdio protocol.
+
+Protocol: MCP JSON-RPC 2.0 (https://modelcontextprotocol.io/)
+Start:    clauck mcp  (or point an MCP client directly at this script)
+
+The server wraps the `clauck` CLI. Every tool call shells out to the locally
+installed clauck binary and returns its combined stdout+stderr as MCP text
+content. No network access, no new dependencies — pure Python stdlib.
+"""
+from __future__ import annotations
+import json
+import shutil
+import subprocess
+import sys
+from pathlib import Path
+
+HOME = Path.home()
+_CLAUCK_FALLBACK = HOME / ".local" / "bin" / "clauck"
+
+SERVER_INFO = {"name": "clauck", "version": "1.0.0"}
+
+TOOLS = [
+    {
+        "name": "list_jobs",
+        "description": (
+            "List all configured clauck jobs with their schedule, "
+            "last-run timestamp, and enabled/disabled status."
+        ),
+        "inputSchema": {"type": "object", "properties": {}, "required": []},
+    },
+    {
+        "name": "get_status",
+        "description": (
+            "Show a system-level overview: scheduler health, job counts, "
+            "recent errors, and next scheduled fires."
+        ),
+        "inputSchema": {"type": "object", "properties": {}, "required": []},
+    },
+    {
+        "name": "fire_job",
+        "description": (
+            "Ad-hoc trigger a clauck job immediately, bypassing its cron schedule. "
+            "Returns the trigger confirmation; the job runs asynchronously."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "name": {"type": "string", "description": "Job name to trigger"},
+                "inputs": {
+                    "type": "string",
+                    "description": (
+                        "Space-separated KEY=VALUE pairs for declared job inputs "
+                        "(e.g. 'SOURCE_PATH=/tmp/foo TARGET_PATH=/tmp/out'). "
+                        "Omit if the job declares no inputs."
+                    ),
+                },
+            },
+            "required": ["name"],
+        },
+    },
+    {
+        "name": "get_logs",
+        "description": "Fetch recent log output for a clauck job.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "name": {"type": "string", "description": "Job name"},
+                "last": {
+                    "type": "integer",
+                    "description": "Number of recent runs to show (default: 3, max: 20)",
+                },
+            },
+            "required": ["name"],
+        },
+    },
+    {
+        "name": "inspect_job",
+        "description": (
+            "Show full configuration, frontmatter, declared inputs, producer/consumer "
+            "DAG, and external trigger definitions for a job."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "name": {"type": "string", "description": "Job name to inspect"},
+            },
+            "required": ["name"],
+        },
+    },
+    {
+        "name": "pause_job",
+        "description": "Disable a job so it no longer fires on schedule.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "name": {"type": "string", "description": "Job name to pause"},
+            },
+            "required": ["name"],
+        },
+    },
+    {
+        "name": "resume_job",
+        "description": "Re-enable a paused job.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "name": {"type": "string", "description": "Job name to resume"},
+            },
+            "required": ["name"],
+        },
+    },
+    {
+        "name": "marketplace_list",
+        "description": (
+            "Browse the clauck marketplace. Returns all installable jobs grouped "
+            "by category, with schedule and cost info."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "tag": {
+                    "type": "string",
+                    "description": (
+                        "Filter by tag (e.g. 'productivity', 'dev', 'monitoring'). "
+                        "Omit to list all categories."
+                    ),
+                },
+            },
+            "required": [],
+        },
+    },
+]
+
+
+def _run(*args: str) -> str:
+    """Run a clauck command; return combined stdout+stderr."""
+    clauck = shutil.which("clauck") or str(_CLAUCK_FALLBACK)
+    try:
+        r = subprocess.run(
+            [clauck, *args],
+            capture_output=True, text=True, timeout=60,
+        )
+        out = (r.stdout + r.stderr).strip()
+        return out or f"(no output; exit {r.returncode})"
+    except FileNotFoundError:
+        return (
+            "error: clauck binary not found. "
+            "Install clauck first: https://github.com/CoreyRDean/clauck"
+        )
+    except subprocess.TimeoutExpired:
+        return "error: clauck command timed out after 60 s"
+
+
+def _dispatch(name: str, args: dict) -> str:
+    if name == "list_jobs":
+        return _run("list")
+    if name == "get_status":
+        return _run("status")
+    if name == "fire_job":
+        cmd: list[str] = ["fire", args["name"]]
+        raw_inputs = (args.get("inputs") or "").strip()
+        if raw_inputs:
+            cmd.extend(raw_inputs.split())
+        return _run(*cmd)
+    if name == "get_logs":
+        cmd = ["logs", args["name"]]
+        if args.get("last"):
+            cmd += ["--last", str(int(args["last"]))]
+        return _run(*cmd)
+    if name == "inspect_job":
+        return _run("inspect", args["name"])
+    if name == "pause_job":
+        return _run("pause", args["name"])
+    if name == "resume_job":
+        return _run("resume", args["name"])
+    if name == "marketplace_list":
+        cmd = ["marketplace"]
+        tag = (args.get("tag") or "").strip()
+        if tag:
+            cmd.append(tag)
+        return _run(*cmd)
+    return f"error: unknown tool '{name}'"
+
+
+# ── JSON-RPC transport ────────────────────────────────────────────────────────
+
+def _send(obj: dict) -> None:
+    sys.stdout.write(json.dumps(obj) + "\n")
+    sys.stdout.flush()
+
+
+def _reply(msg_id: object, result: object) -> None:
+    _send({"jsonrpc": "2.0", "id": msg_id, "result": result})
+
+
+def _error(msg_id: object, code: int, message: str) -> None:
+    _send({"jsonrpc": "2.0", "id": msg_id, "error": {"code": code, "message": message}})
+
+
+def serve() -> None:
+    for raw in sys.stdin:
+        raw = raw.strip()
+        if not raw:
+            continue
+        try:
+            msg = json.loads(raw)
+        except json.JSONDecodeError:
+            continue
+
+        msg_id = msg.get("id")
+        method = msg.get("method", "")
+        params = msg.get("params") or {}
+
+        if method == "initialize":
+            _reply(msg_id, {
+                "protocolVersion": "2024-11-05",
+                "capabilities": {"tools": {}},
+                "serverInfo": SERVER_INFO,
+            })
+        elif method in ("initialized", "notifications/initialized"):
+            pass  # notification — no response expected
+        elif method == "tools/list":
+            _reply(msg_id, {"tools": TOOLS})
+        elif method == "tools/call":
+            tool_name = params.get("name", "")
+            tool_args = params.get("arguments") or {}
+            text = _dispatch(tool_name, tool_args)
+            _reply(msg_id, {"content": [{"type": "text", "text": text}]})
+        elif method == "ping":
+            _reply(msg_id, {})
+        elif msg_id is not None:
+            _error(msg_id, -32601, f"Method not found: {method}")
+
+
+if __name__ == "__main__":
+    serve()

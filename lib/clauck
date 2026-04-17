@@ -28,6 +28,8 @@ Usage:
     clauck doctor [--fix] [--unsafe] [-i] [<context>]   Diagnose system health
                                          (default: --dry --safe — analysis only, no mutations)
     clauck peek                          Live-tail all job logs (Ctrl+C to stop)
+    clauck mcp                           Start the MCP stdio server (for Claude Desktop)
+    clauck mcp --install                 Configure Claude Desktop to use the MCP server
     clauck version                       Show version
     clauck work <text>                   Explicit semantic command (alias)
     clauck <anything else>               Natural-language command (uses Claude)
@@ -63,7 +65,7 @@ MARKETPLACE_DIR = HOME / ".claude" / "skills" / "clauck" / "marketplace"
 KNOWN_COMMANDS = {
     "list", "status", "fire", "pause", "resume", "edit", "logs",
     "marketplace", "install", "update", "uninstall", "config", "version",
-    "doctor", "peek", "work",
+    "doctor", "peek", "work", "mcp",
     "add", "inspect", "remove", "delete", "rm", "next",
     "-h", "--help", "help",
 }
@@ -1034,6 +1036,46 @@ def cmd_version() -> None:
     if installed_at:
         print(f"  installed: {installed_at}")
     print(f"  repo:      {repo}")
+
+
+def cmd_mcp_install() -> None:
+    """Write the clauck MCP server entry into Claude Desktop's config."""
+    import shutil as _shutil
+    clauck_bin = _shutil.which("clauck") or str(HOME / ".local" / "bin" / "clauck")
+    entry = {"command": clauck_bin, "args": ["mcp"]}
+
+    desktop_cfg = (
+        HOME / "Library" / "Application Support" / "Claude" / "claude_desktop_config.json"
+    )
+    try:
+        cfg = json.loads(desktop_cfg.read_text()) if desktop_cfg.exists() else {}
+    except (OSError, ValueError):
+        cfg = {}
+    cfg.setdefault("mcpServers", {})["clauck"] = entry
+    desktop_cfg.parent.mkdir(parents=True, exist_ok=True)
+    desktop_cfg.write_text(json.dumps(cfg, indent=2) + "\n")
+    print(f"  installed: {desktop_cfg}")
+    print("  restart Claude Desktop to load the clauck MCP server")
+    print()
+    print("  tools: list_jobs · get_status · fire_job · get_logs")
+    print("         inspect_job · pause_job · resume_job · marketplace_list")
+
+
+def cmd_mcp() -> None:
+    """Start the clauck MCP stdio server (called by Claude Desktop at startup).
+
+    Execs the installed clauck-mcp script. You can also pipe MCP JSON-RPC
+    messages to it directly for testing:
+        echo '{"jsonrpc":"2.0","id":1,"method":"tools/list"}' | clauck mcp
+    """
+    mcp_script = JOBS_DIR / "clauck-mcp"
+    if not mcp_script.exists():
+        die(
+            "clauck-mcp not found — re-run the installer to deploy it:\n"
+            "  curl -sSL "
+            "https://raw.githubusercontent.com/CoreyRDean/clauck/main/install.sh | bash"
+        )
+    os.execv(sys.executable, [sys.executable, str(mcp_script)])
 
 
 def cmd_add(path: str, name: str = "", when: str = "") -> None:
@@ -2364,6 +2406,11 @@ def main() -> None:
             interactive=interactive,
             context=" ".join(context_parts),
         )
+    elif cmd == "mcp":
+        if "--install" in rest:
+            cmd_mcp_install()
+        else:
+            cmd_mcp()
     elif cmd == "work":
         # `clauck work <text>` is an explicit alias for semantic fallthrough,
         # avoiding conflicts if semantic text starts with a subcommand name.

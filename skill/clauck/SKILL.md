@@ -190,6 +190,36 @@ Each notification shows the job name, success/failure, and cost if available —
 
 The notification fires after the claude session exits, regardless of success or failure. It is emitted via `osascript` and requires no additional software. Silent (no banner) if the user has disabled notifications for Terminal in macOS System Settings → Notifications.
 
+## MCP server (Claude Desktop integration)
+
+clauck ships a stdio MCP server that exposes job management as tools for any MCP-capable client (Claude Desktop, Claude Code, etc.).
+
+**Enable once:**
+```
+clauck mcp --install   # writes entry to ~/Library/Application Support/Claude/claude_desktop_config.json
+                       # restart Claude Desktop afterward
+```
+
+**Available tools:**
+
+| Tool | Equivalent CLI |
+|---|---|
+| `list_jobs` | `clauck list` |
+| `get_status` | `clauck status` |
+| `fire_job(name, [inputs])` | `clauck fire <name> [KEY=VAL …]` |
+| `get_logs(name, [last])` | `clauck logs <name> [--last N]` |
+| `inspect_job(name)` | `clauck inspect <name>` |
+| `pause_job(name)` | `clauck pause <name>` |
+| `resume_job(name)` | `clauck resume <name>` |
+| `marketplace_list([tag])` | `clauck marketplace [tag]` |
+
+**Test from terminal:**
+```bash
+echo '{"jsonrpc":"2.0","id":1,"method":"tools/list"}' | clauck mcp
+```
+
+The server execs `~/.clauck/clauck-mcp` — a standalone Python script installed alongside the other clauck runtime files. No new dependencies; pure stdlib. Each tool call shells out to the installed `clauck` binary.
+
 ## Auto-update configuration
 
 Config file: `~/.clauck/.clauck.config.json`
