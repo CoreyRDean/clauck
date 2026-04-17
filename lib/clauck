@@ -34,8 +34,8 @@ Usage:
                                          fetches open issues for duplicate detection, prompts
                                          to submit when run interactively
     clauck peek                          Live-tail all job logs (Ctrl+C to stop)
-    clauck mcp                           Start the MCP stdio server (for Claude Desktop)
-    clauck mcp --install                 Configure Claude Desktop to use the MCP server
+    clauck mcp                           Start the MCP stdio server
+    clauck mcp --install                 Register MCP server in Claude Desktop and Claude Code
     clauck version                       Show version
     clauck work <text>                   Explicit semantic command (alias)
     clauck <anything else>               Natural-language command (uses Claude)
@@ -1112,11 +1112,21 @@ def cmd_version() -> None:
 
 
 def cmd_mcp_install() -> None:
-    """Write the clauck MCP server entry into Claude Desktop's config."""
+    """Write the clauck MCP server entry into Claude Desktop and Claude Code configs."""
     import shutil as _shutil
+
+    config = load_config()
+    if config.get("no_mcp_install"):
+        print("  MCP auto-install is opted out (no_mcp_install=true in config).")
+        print("  To re-enable: clauck config set no_mcp_install false")
+        return
+
     clauck_bin = _shutil.which("clauck") or str(HOME / ".local" / "bin" / "clauck")
     entry = {"command": clauck_bin, "args": ["mcp"]}
 
+    installed_any = False
+
+    # Claude Desktop
     desktop_cfg = (
         HOME / "Library" / "Application Support" / "Claude" / "claude_desktop_config.json"
     )
@@ -1127,11 +1137,30 @@ def cmd_mcp_install() -> None:
     cfg.setdefault("mcpServers", {})["clauck"] = entry
     desktop_cfg.parent.mkdir(parents=True, exist_ok=True)
     desktop_cfg.write_text(json.dumps(cfg, indent=2) + "\n")
-    print(f"  installed: {desktop_cfg}")
-    print("  restart Claude Desktop to load the clauck MCP server")
-    print()
-    print("  tools: list_jobs · get_status · fire_job · get_logs")
-    print("         inspect_job · pause_job · resume_job · marketplace_list")
+    print(f"  Claude Desktop: {desktop_cfg}")
+    print("  (restart Claude Desktop to load the MCP server)")
+    installed_any = True
+
+    # Claude Code CLI
+    code_cfg = HOME / ".claude" / "settings.json"
+    try:
+        code_data = json.loads(code_cfg.read_text()) if code_cfg.exists() else {}
+    except (OSError, ValueError):
+        code_data = {}
+    servers = code_data.setdefault("mcpServers", {})
+    if servers.get("clauck") != entry:
+        servers["clauck"] = entry
+        code_cfg.parent.mkdir(parents=True, exist_ok=True)
+        code_cfg.write_text(json.dumps(code_data, indent=2) + "\n")
+        print(f"  Claude Code CLI: {code_cfg}")
+        installed_any = True
+    else:
+        print(f"  Claude Code CLI: already registered ({code_cfg})")
+
+    if installed_any:
+        print()
+        print("  tools: list_jobs · get_status · fire_job · get_logs")
+        print("         inspect_job · pause_job · resume_job · marketplace_list")
 
 
 def cmd_mcp() -> None:
