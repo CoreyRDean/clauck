@@ -198,6 +198,50 @@ PROMPT_BODY="$(awk '
   }
 ' "$PROMPT_FILE")"
 
+# --- Inline bash command templating: {{cmd: <command>}} ---
+# Syntax: {{cmd: shell_command}} in the prompt body is evaluated before the
+# model receives it. Runs zsh -lc, 5s timeout, 2048-char output cap per marker.
+# Failures produce a visible [cmd-error: ...] rather than silent corruption.
+if printf '%s' "$PROMPT_BODY" | /usr/bin/grep -qF '{{cmd:'; then
+  _TPSCRIPT="$STATE_DIR/${JOB_NAME}-$$.tpl.py"
+  _TPLIN="$STATE_DIR/${JOB_NAME}-$$.tpl-in"
+  _TPLOG="$STATE_DIR/${JOB_NAME}-$$.tpl-log"
+  cat > "$_TPSCRIPT" << 'PYEOF'
+import re, subprocess, sys
+body = open(sys.argv[1]).read()
+log = []
+def substitute(m):
+    cmd = m.group(1).strip()
+    log.append(f'  cmd={cmd[:80]!r}')
+    try:
+        r = subprocess.run(['/bin/zsh', '-lc', cmd], capture_output=True, text=True, timeout=5)
+        out = r.stdout
+        if len(out) > 2048:
+            out = out[:2048] + '...[truncated]'
+        if r.returncode != 0:
+            log.append(f'  exit={r.returncode}')
+            return f'[cmd-error: exit {r.returncode}: {r.stderr.strip()[:200]}]'
+        log.append(f'  ok len={len(out.strip())}')
+        return out.strip()
+    except subprocess.TimeoutExpired:
+        log.append('  timeout')
+        return '[cmd-error: timeout after 5s]'
+    except Exception as e:
+        log.append(f'  exception: {e}')
+        return f'[cmd-error: {e}]'
+body = re.sub(r'\{\{cmd:\s*(.*?)\}\}', substitute, body)
+open(sys.argv[2], 'w').write('\n'.join(log))
+sys.stdout.write(body)
+PYEOF
+  printf '%s' "$PROMPT_BODY" > "$_TPLIN"
+  PROMPT_BODY="$(/usr/bin/python3 "$_TPSCRIPT" "$_TPLIN" "$_TPLOG" 2>/dev/null)"
+  if [ -s "$_TPLOG" ]; then
+    echo "stage=template_eval" >> "$LOG_FILE"
+    cat "$_TPLOG" >> "$LOG_FILE"
+  fi
+  rm -f "$_TPSCRIPT" "$_TPLIN" "$_TPLOG"
+fi
+
 # --- Compose per-invocation runtime context appended to the global prompt ---
 # The claude CLI accepts either --append-system-prompt OR --append-system-prompt-file,
 # not both, so we read the global file here and concatenate the runtime block,
