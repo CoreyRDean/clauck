@@ -582,7 +582,7 @@ def cmd_rename(old_name: str, new_name: str) -> None:
     print(f"  path: {dst_display}")
     if migrated:
         print(f"  state: {migrated} file(s) migrated")
-    print(f"  note: logs remain under old name for audit history")
+    print("  note: logs remain under old name for audit history")
 
 
 def cmd_edit(name: str) -> None:
