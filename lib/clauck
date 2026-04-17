@@ -647,7 +647,7 @@ def cmd_marketplace(filter_tag: str = "") -> None:
         if category not in seen_categories:
             seen_categories.add(category)
             print(f"\n  [{category}]")
-        installed = (JOBS_DIR / f"{j['name']}.md").exists()
+        installed = _installed_job_path(j["name"]).exists()
         marker = " [installed]" if installed else ""
         cost = j.get("cost_per_run_usd_approx", "?")
         print(f"    {j['name']:<23} ~${cost}/run  {j.get('schedule', '')}{marker}")
@@ -659,6 +659,20 @@ def cmd_marketplace(filter_tag: str = "") -> None:
         all_tags.update(j.get("tags", []))
     print("\n  filter by tag: clauck marketplace <tag>")
     print(f"  tags: {', '.join(sorted(all_tags))}")
+
+
+def _installed_job_path(name: str) -> Path:
+    """Return the installed job's .md path (flat <name>.md or module <name>/JOB.md).
+
+    Returns an empty Path() if neither exists; callers should check with .exists().
+    """
+    flat = JOBS_DIR / f"{name}.md"
+    if flat.exists():
+        return flat
+    module_entry = JOBS_DIR / name / "JOB.md"
+    if module_entry.exists():
+        return module_entry
+    return Path()
 
 
 def cmd_marketplace_info(name: str) -> None:
@@ -673,7 +687,7 @@ def cmd_marketplace_info(name: str) -> None:
     j = match[0]
 
     catalog_ver = j.get("version", "")
-    dst = JOBS_DIR / f"{j['name']}.md"
+    dst = _installed_job_path(j["name"])
     installed = dst.exists()
     installed_ver = _parse_frontmatter_version(dst) if installed else ""
     update_available = installed and catalog_ver and installed_ver != catalog_ver
@@ -734,7 +748,7 @@ def cmd_marketplace_search(query: str) -> None:
         return
     print(f"  {len(jobs)} result(s) for '{query}':\n")
     for j in jobs:
-        installed = (JOBS_DIR / f"{j['name']}.md").exists()
+        installed = _installed_job_path(j["name"]).exists()
         marker = " [installed]" if installed else ""
         cost = j.get("cost_per_run_usd_approx", "?")
         print(f"    {j['name']:<23} ~${cost}/run  {j.get('schedule', '')}{marker}")
@@ -773,17 +787,34 @@ def cmd_install_marketplace(name: str, update: bool = False) -> None:
     job = match[0]
     src = MARKETPLACE_DIR / job["path"]
     if not src.exists():
-        die(f"marketplace file missing: {src}")
-    dst = JOBS_DIR / f"{name}.md"
-    if dst.exists():
-        if not update:
-            die(f"job already exists: {dst}. Remove it first or use --update to overwrite.")
-        installed_ver = _parse_frontmatter_version(dst)
-        backup = JOBS_DIR / f".{name}.md.backup-v{installed_ver or 'unknown'}"
-        shutil.copy2(str(dst), str(backup))
-        print(f"  backed up: {backup}")
-    shutil.copy2(str(src), str(dst))
-    print(f"  installed: {dst}")
+        die(f"marketplace entry missing: {src}")
+    if src.is_dir():
+        # Module format: directory containing JOB.md (plus optional stages / support files)
+        if not (src / "JOB.md").exists():
+            die(f"module missing JOB.md entry point: {src}")
+        dst = JOBS_DIR / name
+        if dst.exists():
+            if not update:
+                die(f"job already exists: {dst}/. Remove it first or use --update to overwrite.")
+            installed_ver = _parse_frontmatter_version(dst / "JOB.md")
+            backup = JOBS_DIR / f".{name}.backup-v{installed_ver or 'unknown'}"
+            if backup.exists():
+                shutil.rmtree(str(backup))
+            shutil.move(str(dst), str(backup))
+            print(f"  backed up: {backup}/")
+        shutil.copytree(str(src), str(dst))
+        print(f"  installed: {dst}/ (module)")
+    else:
+        dst = JOBS_DIR / f"{name}.md"
+        if dst.exists():
+            if not update:
+                die(f"job already exists: {dst}. Remove it first or use --update to overwrite.")
+            installed_ver = _parse_frontmatter_version(dst)
+            backup = JOBS_DIR / f".{name}.md.backup-v{installed_ver or 'unknown'}"
+            shutil.copy2(str(dst), str(backup))
+            print(f"  backed up: {backup}")
+        shutil.copy2(str(src), str(dst))
+        print(f"  installed: {dst}")
     setup = job.get("requires", {}).get("setup", [])
     if setup:
         print("  CUSTOMIZE BEFORE FIRST RUN:")
@@ -804,7 +835,7 @@ def cmd_marketplace_updates() -> None:
     for job in index.get("jobs", []):
         jname = job["name"]
         catalog_ver = job.get("version", "")
-        dst = JOBS_DIR / f"{jname}.md"
+        dst = _installed_job_path(jname)
         if not dst.exists():
             continue
         if not catalog_ver:
