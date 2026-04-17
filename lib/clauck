@@ -27,6 +27,9 @@ Usage:
     clauck inspect <name>                 Inspect a job's config and DAG
     clauck doctor [--fix] [--unsafe] [-i] [<context>]   Diagnose system health
                                          (default: --dry --safe — analysis only, no mutations)
+    clauck report [<text>]               Draft a GitHub issue from free-text description;
+                                         fetches open issues for duplicate detection, prompts
+                                         to submit when run interactively
     clauck peek                          Live-tail all job logs (Ctrl+C to stop)
     clauck mcp                           Start the MCP stdio server (for Claude Desktop)
     clauck mcp --install                 Configure Claude Desktop to use the MCP server
@@ -65,7 +68,7 @@ MARKETPLACE_DIR = HOME / ".claude" / "skills" / "clauck" / "marketplace"
 KNOWN_COMMANDS = {
     "list", "status", "fire", "pause", "resume", "edit", "logs",
     "marketplace", "install", "update", "uninstall", "config", "version",
-    "doctor", "peek", "work", "mcp",
+    "doctor", "report", "peek", "work", "mcp",
     "add", "inspect", "remove", "delete", "rm", "next",
     "-h", "--help", "help",
 }
@@ -2132,6 +2135,214 @@ Produce the actionable result directly. No preamble. No explanation of your proc
 If you attempt to use a native scheduling tool, you have failed."""
 
 
+def _build_report_exec_prompt(tail: str) -> str:
+    """System prompt for the report-writing session.
+
+    The session fetches existing issues for duplicate detection, then drafts a
+    structured ticket. Output must be a single JSON object — no prose.
+    """
+    description_block = tail.strip() or "(no description provided)"
+    return f"""You are the clauck issue reporter. Draft a high-quality GitHub issue from the user's description.
+
+# User description
+{description_block}
+
+# Steps (execute in order)
+
+1. **Fetch existing issues** — run:
+   `gh issue list --state all --limit 100 --json number,title,labels,state`
+   If `gh` is unavailable or returns an error, skip duplicate detection and proceed.
+   For any issue whose title strongly overlaps the description, run:
+   `gh issue view <N> --json number,title,state,body`
+   to read the body before classifying overlap.
+
+2. **Classify** — pick one: bug / feature / idea / question / regression
+
+3. **Draft the ticket**:
+   - `title`: concise imperative phrase, under 70 characters
+   - `body`: full GitHub-flavored markdown body ready for `gh issue create --body`.
+     For bugs: include ## Summary, ## Steps to Reproduce, ## Expected, ## Actual.
+     For features/ideas: include ## Summary, ## Motivation, ## Acceptance Criteria.
+     Do NOT repeat the title in the body. Keep under 500 words.
+   - `labels`: exactly one of ["bug", "enhancement", "security"]
+     - bug / regression → "bug"
+     - feature / idea / question → "enhancement"
+     - security issue → "security"
+   - `related`: list of close matches found in step 1. Each entry:
+     {{"number": <int>, "title": "<str>", "overlap": "duplicate|related|stale"}}
+     Only include issues with genuine overlap. Empty list if none.
+
+4. **Output ONLY valid JSON, no prose, no markdown fences**:
+{{"title": "...", "body": "...", "labels": ["..."], "classification": "bug|feature|idea|question|regression", "related": [{{"number": 0, "title": "...", "overlap": "..."}}]}}
+
+Guidelines:
+- If a near-duplicate exists with overlap "duplicate": flag it and still draft the ticket; the user decides whether to proceed.
+- The body field must be the complete markdown body — not a summary of it.
+- Never add fields not in the schema above.
+"""
+
+
+def cmd_report(tail: str = "") -> None:
+    """Draft and optionally submit a GitHub issue from a free-text description.
+
+    Runs a bounded Claude session that fetches open issues for duplicate
+    detection, then drafts a ticket. Prints the draft; on an interactive tty,
+    prompts to submit via `gh issue create`.
+    """
+    import re as _re
+    import threading
+    import time as _time
+
+    claude_bin = _find_claude()
+    if not claude_bin:
+        die("claude CLI not found — clauck report requires claude on PATH")
+
+    spinner_running = [True]
+    start_time = _time.time()
+
+    def spinner() -> None:
+        chars = "\u280b\u2819\u2839\u2838\u283c\u2834\u2826\u2827\u2807\u280f"
+        i = 0
+        while spinner_running[0]:
+            elapsed = int(_time.time() - start_time)
+            sys.stderr.write(f"\r  {chars[i % len(chars)]} drafting issue... ({elapsed}s)")
+            sys.stderr.flush()
+            i += 1
+            _time.sleep(0.1)
+        sys.stderr.write("\r" + " " * 60 + "\r")
+        sys.stderr.flush()
+
+    spin_thread = threading.Thread(target=spinner, daemon=True)
+    spin_thread.start()
+
+    empty_mcp = STATE_DIR / ".empty-mcp-config.json"
+    if not empty_mcp.exists():
+        STATE_DIR.mkdir(parents=True, exist_ok=True)
+        empty_mcp.write_text('{"mcpServers":{}}')
+
+    exec_prompt = _build_report_exec_prompt(tail)
+    allowlist = {
+        "permissions": {
+            "defaultMode": "bypassPermissions",
+            "allow": ["Bash(gh *)"],
+        }
+    }
+
+    cli = [claude_bin, "-p", "Draft the GitHub issue per your system prompt.",
+           "--append-system-prompt", exec_prompt,
+           "--max-turns", "10",
+           "--max-budget-usd", "0.40",
+           "--model", "haiku",
+           "--output-format", "json",
+           "--setting-sources", "",
+           "--strict-mcp-config",
+           "--mcp-config", str(empty_mcp),
+           "--dangerously-skip-permissions",
+           "--permission-mode", "bypassPermissions",
+           "--settings", json.dumps(allowlist)]
+
+    try:
+        result = subprocess.run(cli, capture_output=True, text=True)
+    finally:
+        spinner_running[0] = False
+        spin_thread.join(timeout=0.5)
+
+    envelope: dict = {}
+    if result.stdout and result.stdout.strip():
+        try:
+            envelope = json.loads(result.stdout)
+        except (json.JSONDecodeError, ValueError):
+            pass
+
+    is_error = envelope.get("is_error", result.returncode != 0)
+    claude_result = envelope.get("result", "").strip()
+
+    draft: dict = {}
+    if claude_result:
+        try:
+            draft = json.loads(claude_result)
+        except (json.JSONDecodeError, ValueError):
+            span = _re.search(r'\{[\s\S]*\}', claude_result)
+            if span:
+                try:
+                    draft = json.loads(span.group(0))
+                except (json.JSONDecodeError, ValueError):
+                    pass
+
+    if is_error and not draft:
+        err_text = envelope.get("errors") or result.stderr
+        if err_text:
+            if isinstance(err_text, list):
+                err_text = "; ".join(str(e) for e in err_text)
+            print(str(err_text).strip(), file=sys.stderr)
+        if claude_result:
+            print(claude_result)
+        sys.exit(1)
+
+    if not draft or not isinstance(draft.get("title"), str):
+        if claude_result:
+            print(claude_result)
+        else:
+            die("report: no draft produced — check that gh is on PATH and you're authenticated")
+        return
+
+    title = draft.get("title", "").strip()
+    body = draft.get("body", "").strip()
+    classification = draft.get("classification", "feature")
+    labels = draft.get("labels") or ["enhancement"]
+    related = draft.get("related") or []
+
+    sep = "\u2500" * 60
+    print(f"  \u2192 {classification}: {title}")
+    print(f"  {sep}")
+    print()
+    body_lines = body.split("\n")
+    preview_lines = body_lines[:60]
+    for line in preview_lines:
+        print(f"  {line}")
+    if len(body_lines) > 60:
+        print(f"  [... {len(body_lines) - 60} more lines ...]")
+    print()
+    if related:
+        rel_strs = []
+        for r in related:
+            if isinstance(r, dict) and r.get("number"):
+                snippet = str(r.get("title", ""))[:50]
+                overlap = r.get("overlap", "related")
+                rel_strs.append(f"#{r['number']} {snippet} [{overlap}]")
+        if rel_strs:
+            print(f"  Related: {', '.join(rel_strs)}")
+    print(f"  {sep}")
+
+    if not (sys.stdin.isatty() and sys.stdout.isatty()):
+        return
+
+    print()
+    try:
+        resp = input("  Submit to GitHub? [y/N] ").strip().lower()
+    except (EOFError, KeyboardInterrupt):
+        print()
+        return
+
+    if resp not in ("y", "yes"):
+        return
+
+    import shutil as _shutil
+    gh_bin = _shutil.which("gh")
+    if not gh_bin:
+        die("gh not found on PATH — install the GitHub CLI to submit issues")
+
+    label = labels[0] if isinstance(labels, list) and labels else "enhancement"
+    create_result = subprocess.run(
+        [gh_bin, "issue", "create", "--title", title, "--body", body, "--label", label],
+        capture_output=True, text=True,
+    )
+    if create_result.returncode != 0:
+        print(f"  ! gh issue create failed: {create_result.stderr.strip()}", file=sys.stderr)
+        sys.exit(1)
+    print(f"  \u2713 submitted: {create_result.stdout.strip()}")
+
+
 def cmd_semantic(text: str) -> None:
     """Two-stage natural-language command pipeline.
 
@@ -2486,6 +2697,9 @@ def main() -> None:
             cmd_mcp_install()
         else:
             cmd_mcp()
+    elif cmd == "report":
+        tail = " ".join(r for r in rest if not r.startswith("-"))
+        cmd_report(tail)
     elif cmd == "work":
         # `clauck work <text>` is an explicit alias for semantic fallthrough,
         # avoiding conflicts if semantic text starts with a subcommand name.
