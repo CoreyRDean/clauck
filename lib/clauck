@@ -1434,7 +1434,8 @@ Reason from the specific context, not from tiers. No two invocations have identi
 - `--unsafe`: same as --fix for sizing; the permission scope doesn't change the work required.
 
 **User context signal:**
-- Specific, narrow question ("is the plist loaded?") → few turns, minimal budget. Don't overprovision; haiku can resolve most yes/no state questions in 2–3 reads.
+- Specific, narrow question ("is the plist loaded?", "is the LaunchAgent active?") → few turns, minimal budget. This applies **only** to genuine yes/no state checks where the answer lives in one known location (one process, one file, one plist). Haiku resolves these in 2–3 reads. Do not apply this tier to any task that requires searching across multiple candidates.
+- **Search-across-logs / locate-output task** ("where did X go", "I don't know where it sent the output", "find the output of Y", "locate what Z wrote", "trace N through the pipeline") → this is a **multi-file search**, not a status lookup. The session must: Glob/Bash to enumerate candidate log files, grep to narrow, then Read 2–4 candidates. That's 6–10 tool calls before any synthesis. **Minimum: haiku OK, ≥ 10 turns, ≥ $0.25.** Do not apply the narrow-question tier here — the file-enumeration + grep + read cycle alone fills 6–8 turns even in the clean case. Known failures: two consecutive invocations of "I just triggered a pe-pipeline run but I don't know where it sent the output" both hit the budget breaker at $0.08–$0.10 (4–5 turns), which is the status-lookup sizing — insufficient for this task shape.
 - Unclear symptom ("something is weird") → full sweep with fixes, plan for broader coverage.
 - Named subsystem failure ("pe-pipeline ran but no artifact") → focused but deep. Read the specific logs, trace the exact chain. Usually sonnet-worthy.
 - Multiple subsystems implicated or architectural suspicion → sonnet, high effort, enough turns to walk the graph.
