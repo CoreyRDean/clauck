@@ -737,6 +737,7 @@ def write_manifest(jobs: list[dict]) -> None:
                 "trigger_command": f'{JOBS_DIR / "trigger-job.sh"} {j["name"]}',
                 "prompt_path": j["path"],
                 "module_root": j.get("module_root", ""),
+                "session_persist": bool(j.get("session_persist", False)),
             }
             for j in visible_jobs
         ],
