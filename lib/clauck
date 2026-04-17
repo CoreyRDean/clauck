@@ -1663,8 +1663,6 @@ def cmd_size(
         print(f"    {k}: {cfg.get(k)}")
     print()
     print(f"  to pin in a job: add `complexity: {scale}` to frontmatter.")
-
-
 def _list_tombstones() -> list[dict]:
     """Return all tombstones sorted newest-first."""
     if not BROKEN_DIR.exists():
