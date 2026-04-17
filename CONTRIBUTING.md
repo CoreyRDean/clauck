@@ -18,7 +18,7 @@ Before proposing a non-trivial change, read [INTENT.md](INTENT.md). It defines w
 
 PRs that change runtime behavior in ways inconsistent with the contract must either reshape to fit or amend the contract first (see `INTENT.md §8`). Non-trivial PR descriptions should cite which primitive, non-negotiable, or property the change serves — reviewers check this.
 
-Simple bug fixes, marketplace jobs, docs corrections, and typo fixes do not require a citation. Architectural changes do.
+Simple bug fixes, marketplace jobs, docs, and typo fixes do not require a citation. Architectural changes do.
 
 ## Development setup
 
