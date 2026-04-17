@@ -1726,6 +1726,7 @@ def cmd_broken() -> None:
 
 
 def cmd_revive(name: str, budget: float | None = None, turns: int | None = None) -> None:
+<<<<<<< HEAD
     """Resume a broken job session as a non-interactive background job.
 
     If the tombstone carries DAG context (dag_invocation_id), route the resume
@@ -1733,6 +1734,9 @@ def cmd_revive(name: str, budget: float | None = None, turns: int | None = None)
     off AND the pipeline continues to downstream nodes, delivering upstream
     promises. Falls back to solo revive when DAG state is missing or expired.
     """
+=======
+    """Resume a broken job session as a non-interactive background job."""
+>>>>>>> 2f533fa (fix(#53): revive as non-interactive background job with consumer chaining)
     stone = _find_tombstone(name)
     if stone is None:
         print(f"  no broken tombstone found for: {name}", file=sys.stderr)
