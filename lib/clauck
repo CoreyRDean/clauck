@@ -1368,6 +1368,59 @@ def cmd_inspect(name: str) -> None:
                 print("\n  Internal stage DAG:")
                 _render_internal_dag("JOB.md", "", False, set())
 
+    # --- Runtime state ---
+    lock_dir = STATE_DIR / f"{name}.lock.d"
+    pid_file = lock_dir / "pid"
+    last_start_file = STATE_DIR / f"{name}.last-start"
+    state = job_state(name)
+
+    running_pid: int | None = None
+    if lock_dir.is_dir() and pid_file.exists():
+        try:
+            p = int(pid_file.read_text().strip())
+            os.kill(p, 0)
+            running_pid = p
+        except (OSError, ValueError, ProcessLookupError):
+            pass  # stale lock — process gone
+
+    last_start_ts: int | None = None
+    if last_start_file.exists():
+        try:
+            last_start_ts = int(last_start_file.read_text().strip())
+        except (OSError, ValueError):
+            pass
+
+    print("  Runtime state:")
+    if running_pid is not None:
+        print(f"  Status:     RUNNING (PID {running_pid})")
+    elif job.get("disabled"):
+        print("  Status:     paused (manually disabled)")
+    elif state.get("auto_disabled"):
+        ad = state["auto_disabled"]
+        if isinstance(ad, dict):
+            reason = ad.get("reason", "auto-disabled")
+            when = ad.get("at", "")
+            suffix = f" (since {when})" if when else ""
+            print(f"  Status:     auto-disabled — {reason}{suffix}")
+        else:
+            print("  Status:     auto-disabled")
+    else:
+        print("  Status:     idle")
+
+    if state.get("last_run"):
+        print(f"  Last run:   {state['last_run']}")
+
+    if last_start_ts is not None:
+        print(f"  Last start: {datetime.fromtimestamp(last_start_ts).isoformat()}")
+
+    if state.get("session_id"):
+        persist_flag = job.get("session_persist", False)
+        label = "persist enabled" if persist_flag else "stale (persist disabled)"
+        print(f"  Session:    {state['session_id']} ({label})")
+
+    if state.get("runs_remaining") is not None:
+        print(f"  Runs left:  {state['runs_remaining']}")
+
     print()
 
 
