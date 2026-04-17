@@ -128,6 +128,27 @@
       }
     },
     {
+      "name": "event-monitor",
+      "version": "1.0.0",
+      "path": "event-monitor.md",
+      "category": "monitoring",
+      "tags": ["monitoring", "health-check", "temporary", "on-call", "deployment", "event", "time-bounded"],
+      "one_line": "Time-bounded health checker: runs every 15 min inside a custom window, alerts on failure, auto-expires when done.",
+      "schedule": "every 15 min within a configurable time window (auto-expires)",
+      "cost_per_run_usd_approx": 0.04,
+      "runs_per_month_approx": "0 outside window; ~24 per 6-hour window",
+      "monthly_cost_usd_approx": "bounded by window duration; ~$0.24 per 6-hour event",
+      "requires": {
+        "mcps": "none (local file fallback) or Slack (for push alerts)",
+        "setup": [
+          "Set valid_after to your window start (ISO 8601).",
+          "Set expires_after to your window end — job auto-disables when it passes.",
+          "Set HEALTH_URL input default to your endpoint.",
+          "Optionally set ALERT_CHANNEL to a Slack DM or channel ID."
+        ]
+      }
+    },
+    {
       "name": "git-commit-nudge",
       "version": "1.0.0",
       "path": "git-commit-nudge.md",
