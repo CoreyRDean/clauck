@@ -18,7 +18,7 @@ from pathlib import Path
 HOME = Path.home()
 _CLAUCK_FALLBACK = HOME / ".local" / "bin" / "clauck"
 
-SERVER_INFO = {"name": "clauck", "version": "1.1.0"}
+SERVER_INFO = {"name": "clauck", "version": "1.2.0"}
 
 TOOLS = [
     {
@@ -186,16 +186,82 @@ TOOLS = [
             "required": ["name"],
         },
     },
+    {
+        "name": "run_doctor",
+        "description": (
+            "Run clauck doctor — inspect the clauck runtime and diagnose health issues. "
+            "In dry mode (default) it reports problems without making changes. "
+            "Pass fix=true to apply automated fixes. "
+            "Use this when a job is failing, the scheduler seems unhealthy, "
+            "or you need a structured health check before deciding what to do next. "
+            "For a quick system overview without diagnosis, use get_status instead. "
+            "Note: this call is synchronous and may take up to several minutes."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "fix": {
+                    "type": "boolean",
+                    "description": (
+                        "Apply automated fixes (default: false — analysis only). "
+                        "When true, doctor will attempt to repair issues it finds."
+                    ),
+                },
+                "unsafe": {
+                    "type": "boolean",
+                    "description": (
+                        "Allow system-file mutations such as LaunchAgent repairs "
+                        "(default: false — safe mode only)."
+                    ),
+                },
+                "context": {
+                    "type": "string",
+                    "description": (
+                        "Optional natural-language hint describing what you suspect "
+                        "is wrong (e.g. 'heartbeat job not firing', 'scheduler plist issue'). "
+                        "Helps the doctor agent focus its diagnosis."
+                    ),
+                },
+            },
+            "required": [],
+        },
+    },
+    {
+        "name": "run_work",
+        "description": (
+            "Run clauck work — the self-heal, build, and maintenance agent. "
+            "Accepts a natural-language description of what you want to accomplish "
+            "and dispatches it as a clauck intent. "
+            "Use this to create jobs, diagnose issues, explore the system, or perform "
+            "any clauck operation expressible in plain English "
+            "(e.g. 'create a job that backs up my notes every hour', "
+            "'why is the heartbeat job failing?'). "
+            "Note: this call is synchronous and may take up to several minutes."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "intent": {
+                    "type": "string",
+                    "description": (
+                        "Natural-language description of what you want clauck to do. "
+                        "Omit to get a system status summary."
+                    ),
+                },
+            },
+            "required": [],
+        },
+    },
 ]
 
 
-def _run(*args: str) -> str:
+def _run(*args: str, timeout: int = 60) -> str:
     """Run a clauck command; return combined stdout+stderr."""
     clauck = shutil.which("clauck") or str(_CLAUCK_FALLBACK)
     try:
         r = subprocess.run(
             [clauck, *args],
-            capture_output=True, text=True, timeout=60,
+            capture_output=True, text=True, timeout=timeout,
         )
         out = (r.stdout + r.stderr).strip()
         return out or f"(no output; exit {r.returncode})"
@@ -205,7 +271,7 @@ def _run(*args: str) -> str:
             "Install clauck first: https://github.com/CoreyRDean/clauck"
         )
     except subprocess.TimeoutExpired:
-        return "error: clauck command timed out after 60 s"
+        return f"error: clauck command timed out after {timeout} s"
 
 
 def _dispatch(name: str, args: dict) -> str:
@@ -244,6 +310,21 @@ def _dispatch(name: str, args: dict) -> str:
         return _run("marketplace", "info", args["name"])
     if name == "install_job":
         return _run("install", args["name"])
+    if name == "run_doctor":
+        cmd: list[str] = ["doctor"]
+        if args.get("fix"):
+            cmd.append("--fix")
+        if args.get("unsafe"):
+            cmd.append("--unsafe")
+        context = (args.get("context") or "").strip()
+        if context:
+            cmd.append(context)
+        return _run(*cmd, timeout=300)
+    if name == "run_work":
+        intent = (args.get("intent") or "").strip()
+        if intent:
+            return _run("work", intent, timeout=300)
+        return _run("work", timeout=300)
     return f"error: unknown tool '{name}'"
 
 
