@@ -12,8 +12,9 @@ Usage:
     clauck edit <module>/<stage>         Edit module internal stage file
     clauck remove <name>                 Delete a job + its state (also: delete, rm)
     clauck rename <old> <new>            Rename a job, migrating all state atomically (also: mv)
-    clauck logs <name> [--last N]        Show recent logs (paths + summary)
+    clauck logs <name> [--last N]        Show recent logs (paths + summary); marks active run
     clauck logs <name> --show [N]        Print content of Nth most recent log (default: 1)
+    clauck logs <name> --follow          Tail the active run; falls back to most recent log
     clauck marketplace                    Browse pre-made jobs
     clauck marketplace info <name>        Show full details for a marketplace job
     clauck marketplace search <query>     Search marketplace by keyword
@@ -673,10 +674,74 @@ def cmd_edit(name: str) -> None:
         print(f"  reset runs counter for: {canonical_name}")
 
 
-def cmd_logs(name: str, last: int = 5, show: int = 0) -> None:
-    import re as _re
+def _active_log(name: str) -> "Path | None":
+    """Return the active log path if the job is currently running, else None.
+
+    Checks the advisory lock dir written by run-job.sh. Returns the most recent
+    log file that has not yet received its exit_code tombstone.
+    """
+    import os as _os
+
+    pid_file = STATE_DIR / f"{name}.lock.d" / "pid"
+    if not pid_file.exists():
+        return None
+    try:
+        pid = int(pid_file.read_text().strip())
+        _os.kill(pid, 0)  # OSError if process is dead or not ours
+    except (OSError, ValueError):
+        return None
     pattern = f"{name}-[0-9]*.log"
     logs = sorted(JOBS_DIR.glob(pattern), key=lambda p: p.stat().st_mtime, reverse=True)
+    for log in logs:
+        if "exit_code=" not in log.read_text():
+            return log
+    return None
+
+
+def _follow_log(path: "Path", lock_dir: "Path") -> None:
+    """Stream a log file to stdout, exiting when the exit_code tombstone lands."""
+    import time as _time
+
+    with open(path) as fh:
+        content = fh.read()
+        print(content, end="", flush=True)
+        if "exit_code=" in content:
+            return
+        while True:
+            chunk = fh.read()
+            if chunk:
+                print(chunk, end="", flush=True)
+                if "exit_code=" in chunk:
+                    break
+            elif not lock_dir.exists():
+                final = fh.read()
+                if final:
+                    print(final, end="", flush=True)
+                break
+            else:
+                _time.sleep(0.3)
+
+
+def cmd_logs(name: str, last: int = 5, show: int = 0, follow: bool = False) -> None:
+    import re as _re
+
+    pattern = f"{name}-[0-9]*.log"
+    logs = sorted(JOBS_DIR.glob(pattern), key=lambda p: p.stat().st_mtime, reverse=True)
+
+    active = _active_log(name)
+
+    if follow:
+        target = active or (logs[0] if logs else None)
+        if not target:
+            print(f"  no logs found for: {name}")
+            return
+        if active:
+            print(f"  tailing active run: {target.name}  (Ctrl-C to stop)", flush=True)
+        else:
+            print(f"  no active run — tailing most recent: {target.name}", flush=True)
+        _follow_log(target, STATE_DIR / f"{name}.lock.d")
+        return
+
     if not logs:
         print(f"  no logs found for: {name}")
         return
@@ -691,13 +756,16 @@ def cmd_logs(name: str, last: int = 5, show: int = 0) -> None:
         text = log.read_text()
         exit_line = ""
         cost = ""
-        for line in text.splitlines():
-            if "exit_code=" in line:
-                exit_line = line.strip()
-            if '"total_cost_usd"' in line:
-                m = _re.search(r'"total_cost_usd":([\d.]+)', line)
-                if m:
-                    cost = f"${float(m.group(1)):.4f}"
+        if log == active:
+            exit_line = "[active]"
+        else:
+            for line in text.splitlines():
+                if "exit_code=" in line:
+                    exit_line = line.strip()
+                if '"total_cost_usd"' in line:
+                    m = _re.search(r'"total_cost_usd":([\d.]+)', line)
+                    if m:
+                        cost = f"${float(m.group(1)):.4f}"
         ts = log.stem.split("-", 1)[1] if "-" in log.stem else "?"
         print(f"  {ts:<30} {exit_line:<25} {cost:<10}  {log}")
 
@@ -3042,6 +3110,7 @@ def main() -> None:
     elif cmd == "logs" and rest:
         last = 5
         show = 0
+        follow = False
         if "--last" in rest:
             idx = rest.index("--last")
             if idx + 1 < len(rest):
@@ -3056,7 +3125,10 @@ def main() -> None:
             else:
                 show = 1
                 rest = [r for i, r in enumerate(rest) if i != idx]
-        cmd_logs(rest[0], last, show)
+        if "--follow" in rest or "--tail" in rest:
+            follow = True
+            rest = [r for r in rest if r not in ("--follow", "--tail")]
+        cmd_logs(rest[0], last, show, follow)
     elif cmd == "marketplace":
         if rest and rest[0] == "updates":
             cmd_marketplace_updates()
