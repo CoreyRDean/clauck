@@ -1528,7 +1528,9 @@ def _build_doctor_exec_prompt(dry: bool, safe: bool, context: str) -> str:
 
 You are in DRY mode. DO NOT mutate any files. No Write, no Edit, no rm, no mv, no file-modifying Bash commands. Read everything you need; propose fixes as a plan for the human to apply.
 
-If you notice fixes that obviously should be applied, list them in a "## Recommended fixes" block at the end with exact commands or diffs. Do not apply them."""
+If you notice fixes that obviously should be applied, list them in a "## Recommended fixes" block at the end with exact commands or diffs. Do not apply them.
+
+For each **actionable, non-optional** finding, include a one-line code block under the finding with a ready-to-run command of the form `clauck doctor --fix "<concise imperative instruction that applies ONLY this finding>"`. The instruction is a natural-language directive for the fix agent (not shell), so keep it a single line with no embedded double-quotes. Findings that are purely advisory / optional / informational get NO per-finding fix command — do not coax the user into optional work."""
     elif safe:
         mode_block = f"""# Mode: FIX / SAFE
 
@@ -1610,18 +1612,37 @@ Stop walking the menu as soon as you have a concrete issue to address. Finding o
 
 Keep output tight. Template depends on mode:
 
-**DRY mode:**
+**DRY mode — your final message MUST be a single JSON object (no prose, no markdown fences around the object itself) matching this schema:**
+
+```
+{{
+  "report": "<the full human-readable markdown report — summary, findings (with per-item `clauck doctor --fix \"...\"` code blocks under each actionable finding), and Recommended fixes section>",
+  "fix_instruction": "<single-line imperative covering ALL non-optional findings, suitable for passing as the argument of `clauck doctor --fix \"...\"`>" | null
+}}
+```
+
+Rules:
+- `report` is a JSON-escaped string. Newlines in the markdown must be encoded as `\n`. Double-quotes in the markdown must be escaped as `\"`. Backticks, `#`, and other markdown syntax need no escaping.
+- `fix_instruction` is `null` if the report is healthy or contains only advisory/optional items. Otherwise it is a concise imperative that, when handed back to `clauck doctor --fix "..."`, captures all non-optional fixes as a single directive.
+- `fix_instruction`, when non-null, must be a single line (no newlines) and must not contain double-quote characters (so it renders cleanly inside the outer `"..."` on the user's terminal and in a re-invocation).
+- Nothing outside the JSON object. No preamble, no trailing prose, no code fences around the outermost `{{...}}`.
+
+The inner `report` is the markdown shape the user will see. Target structure for `report` content:
+
 ```
 ## Health summary
 <one-line overall status>
 
 ## Findings
 1. <Issue>: <root cause>. <Recommended fix: exact command or diff>.
+   `clauck doctor --fix "<per-item instruction>"`
 2. ...
 
 ## Recommended fixes
 <exact commands or diffs, grouped and deduplicated>
 ```
+
+(Omit the per-item `clauck doctor --fix` line for any finding that is purely advisory / optional. If the whole report is healthy, the `report` markdown can be a single line and `fix_instruction` is `null`.)
 
 **FIX mode (safe or unsafe):**
 ```
@@ -1851,6 +1872,38 @@ def cmd_doctor(
     is_error = envelope.get("is_error", result.returncode != 0)
     session_id = envelope.get("session_id", "")
 
+    # In DRY mode the exec prompt requires the final message to be a JSON
+    # object of shape {"report": "<markdown>", "fix_instruction": "<str>|null}.
+    # Parse it to extract the display report and the optional queued fix. If
+    # parsing fails (malformed JSON, model drift), fall back to treating the
+    # whole result as markdown with no queued fix — graceful degradation to
+    # the pre-schema behaviour.
+    fix_instruction = ""
+    if dry and claude_result:
+        import re as _re_json
+        inner_obj = None
+        try:
+            inner_obj = json.loads(claude_result)
+        except (json.JSONDecodeError, ValueError):
+            # Tolerate markdown fences or leading/trailing prose by grabbing
+            # the outermost {...} span, matching the stage-1 interpreter's
+            # parser in _parse_interpreter_result.
+            span = _re_json.search(r"\{[\s\S]*\}", claude_result)
+            if span:
+                try:
+                    inner_obj = json.loads(span.group(0))
+                except (json.JSONDecodeError, ValueError):
+                    inner_obj = None
+        if isinstance(inner_obj, dict) and isinstance(inner_obj.get("report"), str):
+            claude_result = inner_obj["report"].strip()
+            candidate = inner_obj.get("fix_instruction")
+            if isinstance(candidate, str):
+                candidate = candidate.strip()
+                # Guard rails: single line, no embedded double-quotes (display
+                # sanity when echoed inside `clauck doctor --fix "..."`).
+                if candidate and "\n" not in candidate and '"' not in candidate:
+                    fix_instruction = candidate
+
     if claude_result:
         print(claude_result)
 
@@ -1861,6 +1914,28 @@ def cmd_doctor(
                 err_text = "; ".join(str(e) for e in err_text)
             print(str(err_text).strip(), file=sys.stderr)
         sys.exit(1)
+
+    # Auto-prompt: if the diagnostic model queued a fix instruction and we're
+    # running attached to a tty, offer to run it without the user retyping. The
+    # instruction is passed as a single argv element to a re-invocation of this
+    # same CLI — no shell interpretation, so fix_instruction can't expand to
+    # arbitrary commands.
+    if fix_instruction and sys.stdin.isatty() and sys.stdout.isatty():
+        print()
+        print(f'  Queued fix: clauck doctor --fix "{fix_instruction}"')
+        try:
+            resp = input("  Proceed with fix? [Y/n] ").strip().lower()
+        except (EOFError, KeyboardInterrupt):
+            print()
+            return
+        if resp in ("", "y", "yes"):
+            fix_argv = [sys.argv[0], "doctor", "--fix"]
+            if not safe:
+                # Preserve --unsafe only if the original invocation was --unsafe.
+                # Never elevate a --safe dry run to --unsafe auto-fix.
+                fix_argv.append("--unsafe")
+            fix_argv.append(fix_instruction)
+            os.execvp(sys.argv[0], fix_argv)
 
     # Optional interactive follow-up on a resolvable session.
     if interactive and session_id:
