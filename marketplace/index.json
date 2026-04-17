@@ -165,6 +165,25 @@
           "Change REPOS_ROOT in the prompt body to your git repos parent directory."
         ]
       }
+    },
+    {
+      "name": "dynamic-context-demo",
+      "version": "1.0.0",
+      "path": "dynamic-context-demo.md",
+      "category": "example",
+      "tags": ["example", "templating", "demo", "reference"],
+      "one_line": "Reference job demonstrating {{cmd:}} inline bash templating — injects live date and git state into the prompt body.",
+      "schedule": "ad-hoc only (customize cron to taste)",
+      "cost_per_run_usd_approx": 0.01,
+      "runs_per_month_approx": 0,
+      "monthly_cost_usd_approx": 0.00,
+      "requires": {
+        "mcps": "none",
+        "setup": [
+          "Change the repo path in the prompt body to a git repo you want to inspect.",
+          "Add your own {{cmd:}} markers to inject other live shell context."
+        ]
+      }
     }
   ]
 }

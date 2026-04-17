@@ -724,5 +724,54 @@ class TestEvaluateTrigger(unittest.TestCase):
             scheduler._evaluate_trigger({"type": "nonexistent_type"}, None)
 
 
+# ---------------------------------------------------------------------------
+# substitute_bash_templates
+# ---------------------------------------------------------------------------
+
+
+class TestSubstituteBashTemplates(unittest.TestCase):
+    def test_no_markers(self):
+        body, log = scheduler.substitute_bash_templates("plain text, no markers")
+        self.assertEqual(body, "plain text, no markers")
+        self.assertEqual(log, [])
+
+    def test_simple_echo(self):
+        body, log = scheduler.substitute_bash_templates("greeting={{cmd: echo hello}}")
+        self.assertEqual(body, "greeting=hello")
+        self.assertTrue(any("ok" in line for line in log))
+
+    def test_shell_metacharacters_in_prompt_are_safe(self):
+        body, log = scheduler.substitute_bash_templates("Use $(foo) or ${bar} safely")
+        self.assertEqual(body, "Use $(foo) or ${bar} safely")
+        self.assertEqual(log, [])
+
+    def test_command_failure(self):
+        body, log = scheduler.substitute_bash_templates("{{cmd: false}}")
+        self.assertTrue(body.startswith("[cmd-error: exit 1"))
+
+    def test_output_cap(self):
+        body, log = scheduler.substitute_bash_templates(
+            "{{cmd: python3 -c \"print('x' * 3000)\"}}"
+        )
+        self.assertIn("...[truncated]", body)
+        self.assertEqual(body.count("x"), 2048)
+
+    def test_multiple_markers(self):
+        body, log = scheduler.substitute_bash_templates(
+            "A={{cmd: echo a}} B={{cmd: echo b}}"
+        )
+        self.assertEqual(body, "A=a B=b")
+        self.assertEqual(len([line for line in log if "cmd=" in line]), 2)
+
+    def test_whitespace_trimmed(self):
+        body, log = scheduler.substitute_bash_templates("{{cmd:  echo hello  }}")
+        self.assertEqual(body, "hello")
+
+    def test_nonzero_exit_message(self):
+        body, log = scheduler.substitute_bash_templates("{{cmd: exit 42}}")
+        self.assertIn("exit 42", body)
+        self.assertIn("[cmd-error:", body)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -1030,6 +1030,48 @@ def trigger(name: str) -> None:
     print(f"[scheduler] ad-hoc triggered {name}")
 
 
+def substitute_bash_templates(body: str) -> tuple[str, list[str]]:
+    """Expand ``{{cmd: shell_command}}`` markers in a prompt body.
+
+    Returns ``(expanded_body, log_lines)``.  Each marker is evaluated via
+    ``zsh -lc`` with a 5-second timeout; stdout replaces the marker (capped at
+    2048 chars).  On failure the marker is replaced with a visible
+    ``[cmd-error: ...]`` string so failures are always observable.
+    """
+    import re
+    import subprocess
+
+    log_lines: list[str] = []
+
+    def _substitute(m: "re.Match[str]") -> str:
+        cmd = m.group(1).strip()
+        log_lines.append(f"  cmd={cmd[:80]!r}")
+        try:
+            r = subprocess.run(
+                ["/bin/zsh", "-lc", cmd],
+                capture_output=True,
+                text=True,
+                timeout=5,
+            )
+            out = r.stdout
+            if len(out) > 2048:
+                out = out[:2048] + "...[truncated]"
+            if r.returncode != 0:
+                log_lines.append(f"  exit={r.returncode}")
+                return f"[cmd-error: exit {r.returncode}: {r.stderr.strip()[:200]}]"
+            log_lines.append(f"  ok len={len(out.strip())}")
+            return out.strip()
+        except subprocess.TimeoutExpired:
+            log_lines.append("  timeout")
+            return "[cmd-error: timeout after 5s]"
+        except Exception as e:  # noqa: BLE001
+            log_lines.append(f"  exception: {e}")
+            return f"[cmd-error: {e}]"
+
+    expanded = re.sub(r"\{\{cmd:\s*(.*?)\}\}", _substitute, body)
+    return expanded, log_lines
+
+
 def main() -> None:
     if len(sys.argv) >= 3 and sys.argv[1] == "--trigger":
         trigger(sys.argv[2])
