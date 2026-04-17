@@ -508,6 +508,68 @@ fi
 
 echo "--- exit_code=$EXIT_CODE ===" >> "$LOG_FILE"
 
+# --- Circuit-breaker tombstone: capture session on budget/turn exhaustion ---
+# If the job tripped max_budget or max_turns, write a tombstone so the user can
+# revive the session with augmented limits via: clauck revive <name>
+if [ "$EXIT_CODE" -ne 0 ]; then
+  /usr/bin/python3 - \
+      "${JOB_NAME}" "${LOG_FILE}" "${JOBS_DIR}/.broken" \
+      "${MAX_TURNS:-50}" "${MAX_BUDGET_USD:-2.0}" << 'PYEOF_BROKEN' 2>/dev/null || true
+import json, os, sys
+from datetime import datetime, timezone
+
+job_name   = sys.argv[1] if len(sys.argv) > 1 else "?"
+log_file   = sys.argv[2] if len(sys.argv) > 2 else ""
+broken_dir = sys.argv[3] if len(sys.argv) > 3 else ""
+orig_turns = int(sys.argv[4]) if len(sys.argv) > 4 else 50
+orig_budget = float(sys.argv[5]) if len(sys.argv) > 5 else 2.0
+
+TRIP_REASONS = {"max_turns", "max_budget", "budget_exceeded"}
+
+if not log_file or not broken_dir:
+    sys.exit(0)
+
+envelope = None
+try:
+    for line in reversed(open(log_file).read().splitlines()):
+        try:
+            obj = json.loads(line)
+            if "terminal_reason" in obj or "session_id" in obj:
+                envelope = obj
+                break
+        except Exception:
+            pass
+except Exception:
+    sys.exit(0)
+
+if not envelope:
+    sys.exit(0)
+
+terminal_reason = envelope.get("terminal_reason", "")
+if terminal_reason not in TRIP_REASONS:
+    sys.exit(0)
+
+session_id = envelope.get("session_id", "")
+spend = envelope.get("total_cost_usd") or envelope.get("cost_usd")
+
+os.makedirs(broken_dir, exist_ok=True)
+ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+tombstone_path = os.path.join(broken_dir, f"{job_name}-{ts}.json")
+tombstone = {
+    "job": job_name,
+    "ts": datetime.now(timezone.utc).isoformat(),
+    "log": log_file,
+    "session_id": session_id,
+    "trip_reason": terminal_reason,
+    "orig_max_turns": orig_turns,
+    "orig_max_budget_usd": orig_budget,
+    "spend_usd": spend,
+}
+with open(tombstone_path, "w") as f:
+    json.dump(tombstone, f, indent=2)
+PYEOF_BROKEN
+fi
+
 # --- macOS push notification (opt-in via: clauck config set notifications true) ---
 /usr/bin/python3 - "${JOB_NAME}" "${EXIT_CODE}" "${LOG_FILE}" "${JOBS_DIR}/.clauck.config.json" << 'PYEOF' 2>/dev/null || true
 import json, os, subprocess, sys

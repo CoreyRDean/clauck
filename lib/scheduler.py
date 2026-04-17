@@ -1012,10 +1012,25 @@ def maybe_check_for_updates() -> None:
 # ---------- main ----------
 
 
+def _cleanup_stale_tombstones(retention_hours: int = 72) -> None:
+    """Remove tombstones older than retention_hours from ~/.clauck/.broken/."""
+    broken_dir = JOBS_DIR / ".broken"
+    if not broken_dir.exists():
+        return
+    cutoff = datetime.now().timestamp() - retention_hours * 3600
+    for p in broken_dir.glob("*.json"):
+        try:
+            if p.stat().st_mtime < cutoff:
+                p.unlink()
+        except OSError:
+            pass
+
+
 def tick() -> None:
     jobs = discover_jobs()
     write_manifest(jobs)
     maybe_check_for_updates()
+    _cleanup_stale_tombstones()
     now = datetime.now()
     minute_start = int(now.replace(second=0, microsecond=0).timestamp())
 
