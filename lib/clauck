@@ -33,7 +33,9 @@ Usage:
                                          (default: --dry --safe — analysis only, no mutations)
     clauck report [<text>]               Draft a GitHub issue from free-text description;
                                          fetches open issues for duplicate detection, prompts
-                                         to submit when run interactively
+                                         to submit when run interactively.
+                                         No args: interactive intent-mining session.
+                                         --inbox: review pending drafts from prior sessions.
     clauck peek                          Live-tail all job logs (Ctrl+C to stop)
     clauck mcp                           Start the MCP stdio server
     clauck mcp --install                 Register MCP server in Claude Desktop and Claude Code
@@ -67,6 +69,7 @@ TRIGGER_SCRIPT = JOBS_DIR / "trigger-job.sh"
 UPDATE_SCRIPT = JOBS_DIR / "update-check.sh"
 UNINSTALL_SCRIPT = JOBS_DIR / "uninstall.sh"
 MARKETPLACE_DIR = HOME / ".claude" / "skills" / "clauck" / "marketplace"
+REPORTS_DIR = JOBS_DIR / "reports"
 
 
 KNOWN_COMMANDS = {
@@ -2632,6 +2635,104 @@ Produce the actionable result directly. No preamble. No explanation of your proc
 If you attempt to use a native scheduling tool, you have failed."""
 
 
+def _find_pending_drafts() -> list:
+    """Return list of draft paths in REPORTS_DIR, newest first."""
+    if not REPORTS_DIR.exists():
+        return []
+    return sorted(
+        REPORTS_DIR.glob("*-draft.json"),
+        key=lambda p: p.stat().st_mtime,
+        reverse=True,
+    )
+
+
+def _build_interactive_mining_prompt(draft_path: "Path", prefilled: dict | None = None) -> str:
+    """System prompt for an interactive intent-mining session.
+
+    Instructs the agent to mine user intent conversationally, save drafts to
+    disk at draft_path, and submit via gh when the user is satisfied.
+    """
+    prefill_block = ""
+    if prefilled and isinstance(prefilled.get("title"), str):
+        import json as _json
+        prefill_block = f"""
+## Pre-loaded draft (from initial description)
+Use this as a starting point and refine it with the user:
+
+```json
+{_json.dumps(prefilled, indent=2)}
+```
+"""
+
+    return f"""You are the clauck issue reporter in interactive mining mode.
+
+Your goal: collaborate with the user to draft a high-quality GitHub issue.
+{prefill_block}
+## Your process
+
+1. **Introduce yourself briefly** — one sentence. Ask the user to describe their issue or feature request.
+2. **Mine intent** — ask focused follow-up questions. Prefer binary or short-answer questions over open-ended ones. For bugs: Steps to reproduce, expected vs actual. For features: the motivation/why, acceptance criteria.
+3. **Offer exit ramps** — after each exchange, mention "say 'draft it' when you're ready". Don't force extra turns.
+4. **Save the draft** whenever you have a reasonable version. Use:
+```bash
+python3 -c "import json, pathlib; pathlib.Path('{draft_path}').parent.mkdir(parents=True, exist_ok=True); pathlib.Path('{draft_path}').write_text(json.dumps({{'title': 'TITLE', 'body': 'BODY', 'labels': ['enhancement'], 'classification': 'feature', 'related': []}}, indent=2))"
+```
+   Replace TITLE and BODY with the actual values. Update the file on each refinement.
+5. **Show and submit** when the user is satisfied:
+   - Show a one-line summary of the title
+   - Ask: "Submit to GitHub? [y/N]"
+   - On yes: run `gh issue create --title "TITLE" --body "BODY" --label LABEL`
+   - Report the issue URL
+
+## Constraints
+- Only `gh` CLI and `python3 -c` for draft writing are permitted.
+- Do not open PRs. This session is for issue drafting only.
+- If the user says "quit", "exit", or "cancel": save whatever draft exists and exit gracefully.
+- Keep the draft body under 500 words. Focus on clarity, not exhaustiveness.
+"""
+
+
+def _launch_interactive_mining(draft_path: "Path", prefilled: dict | None = None) -> None:
+    """Spawn an interactive Claude session for intent mining."""
+    claude_bin = _find_claude()
+    if not claude_bin:
+        die("claude CLI not found — clauck report requires claude on PATH")
+
+    REPORTS_DIR.mkdir(parents=True, exist_ok=True)
+    STATE_DIR.mkdir(parents=True, exist_ok=True)
+
+    empty_mcp = STATE_DIR / ".empty-mcp-config.json"
+    if not empty_mcp.exists():
+        empty_mcp.write_text('{"mcpServers":{}}')
+
+    prompt = _build_interactive_mining_prompt(draft_path, prefilled)
+    allowlist = json.dumps({
+        "permissions": {
+            "defaultMode": "bypassPermissions",
+            "allow": [
+                "Bash(gh *)",
+                "Bash(python3 -c *)",
+            ],
+        }
+    })
+
+    cli = [
+        claude_bin,
+        "--append-system-prompt", prompt,
+        "--setting-sources", "",
+        "--strict-mcp-config",
+        "--mcp-config", str(empty_mcp),
+        "--dangerously-skip-permissions",
+        "--permission-mode", "bypassPermissions",
+        "--settings", allowlist,
+    ]
+
+    try:
+        subprocess.run(cli)
+    except KeyboardInterrupt:
+        pass
+
+
 def _build_report_exec_prompt(tail: str) -> str:
     """System prompt for the report-writing session.
 
@@ -2668,27 +2769,115 @@ def _build_report_exec_prompt(tail: str) -> str:
    - `related`: list of close matches found in step 1. Each entry:
      {{"number": <int>, "title": "<str>", "overlap": "duplicate|related|stale"}}
      Only include issues with genuine overlap. Empty list if none.
+   - `mine`: set to `true` if the description is too vague to draft a quality ticket
+     and interactive refinement would help; `false` otherwise.
 
 4. **Output ONLY valid JSON, no prose, no markdown fences**:
-{{"title": "...", "body": "...", "labels": ["..."], "classification": "bug|feature|idea|question|regression", "related": [{{"number": 0, "title": "...", "overlap": "..."}}]}}
+{{"title": "...", "body": "...", "labels": ["..."], "classification": "bug|feature|idea|question|regression", "related": [{{"number": 0, "title": "...", "overlap": "..."}}], "mine": false}}
 
 Guidelines:
 - If a near-duplicate exists with overlap "duplicate": flag it and still draft the ticket; the user decides whether to proceed.
 - The body field must be the complete markdown body — not a summary of it.
+- Set `mine: true` only when the description genuinely lacks enough detail to produce a useful ticket.
 - Never add fields not in the schema above.
 """
 
 
-def cmd_report(tail: str = "") -> None:
+def _handle_report_inbox() -> None:
+    """Surface pending report drafts and let the user review/submit/discard each."""
+    import shutil as _shutil
+
+    drafts = _find_pending_drafts()
+    if not drafts:
+        print("  no pending drafts")
+        return
+
+    sep = "\u2500" * 60
+    for i, path in enumerate(drafts, 1):
+        try:
+            draft = json.loads(path.read_text())
+        except (json.JSONDecodeError, OSError):
+            print(f"  {i}. {path.name}  [unreadable — skipping]")
+            continue
+
+        title = draft.get("title", "(untitled)")
+        classification = draft.get("classification", "feature")
+        mtime = datetime.fromtimestamp(path.stat().st_mtime, tz=timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+        print(f"\n  [{i}/{len(drafts)}] {classification}: {title}")
+        print(f"  saved: {mtime}")
+        print(f"  {sep}")
+        body_preview = (draft.get("body") or "")[:300]
+        for line in body_preview.splitlines()[:8]:
+            print(f"  {line}")
+        print()
+
+        if not (sys.stdin.isatty() and sys.stdout.isatty()):
+            continue
+
+        try:
+            resp = input("  [s]ubmit  [d]iscard  [skip/Enter] ").strip().lower()
+        except (EOFError, KeyboardInterrupt):
+            print()
+            return
+
+        if resp in ("d", "discard"):
+            path.unlink(missing_ok=True)
+            print("  discarded")
+        elif resp in ("s", "submit"):
+            gh_bin = _shutil.which("gh")
+            if not gh_bin:
+                die("gh not found on PATH — install the GitHub CLI to submit issues")
+            labels = draft.get("labels") or ["enhancement"]
+            label = labels[0] if isinstance(labels, list) and labels else "enhancement"
+            body = draft.get("body", "")
+            result = subprocess.run(
+                [gh_bin, "issue", "create", "--title", title, "--body", body, "--label", label],
+                capture_output=True, text=True,
+            )
+            if result.returncode != 0:
+                print(f"  ! submit failed: {result.stderr.strip()}", file=sys.stderr)
+            else:
+                print(f"  \u2713 submitted: {result.stdout.strip()}")
+                path.unlink(missing_ok=True)
+
+
+def cmd_report(tail: str = "", inbox: bool = False) -> None:
     """Draft and optionally submit a GitHub issue from a free-text description.
 
-    Runs a bounded Claude session that fetches open issues for duplicate
-    detection, then drafts a ticket. Prints the draft; on an interactive tty,
-    prompts to submit via `gh issue create`.
+    With no args and an interactive tty, launches an intent-mining session.
+    With --inbox, surfaces pending drafts from prior sessions.
+    With a text argument, runs a headless drafting session.
     """
+    if inbox:
+        _handle_report_inbox()
+        return
+
     import re as _re
     import threading
     import time as _time
+
+    # No args + interactive tty → check for pending drafts or launch mining
+    if not tail and sys.stdin.isatty() and sys.stdout.isatty():
+        pending = _find_pending_drafts()
+        if pending:
+            print(f"  {len(pending)} pending draft(s) — run `clauck report --inbox` to review")
+            print()
+        import datetime as _dt
+        ts = _dt.datetime.now().strftime("%Y%m%dT%H%M%S")
+        draft_path = REPORTS_DIR / f"{ts}-draft.json"
+        print("  Starting interactive intent-mining session...")
+        print("  Describe your issue to Claude. Say 'draft it' when ready to commit.")
+        print()
+        _launch_interactive_mining(draft_path)
+        if draft_path.exists():
+            try:
+                saved = json.loads(draft_path.read_text())
+                title = saved.get("title", "(untitled)")
+                print(f"\n  Draft saved: {title}")
+                print("  Run `clauck report --inbox` to submit or discard it.")
+            except (json.JSONDecodeError, OSError):
+                pass
+        return
 
     claude_bin = _find_claude()
     if not claude_bin:
@@ -2781,6 +2970,24 @@ def cmd_report(tail: str = "") -> None:
             print(claude_result)
         else:
             die("report: no draft produced — check that gh is on PATH and you're authenticated")
+        return
+
+    # Stage 1 flagged description as too vague → offer interactive refinement
+    if draft.get("mine") and sys.stdin.isatty() and sys.stdout.isatty():
+        import datetime as _dt
+        ts = _dt.datetime.now().strftime("%Y%m%dT%H%M%S")
+        draft_path = REPORTS_DIR / f"{ts}-draft.json"
+        print("  \u2192 description needs more context; launching interactive refinement...")
+        print()
+        _launch_interactive_mining(draft_path, prefilled=draft)
+        if draft_path.exists():
+            try:
+                saved = json.loads(draft_path.read_text())
+                saved_title = saved.get("title", "(untitled)")
+                print(f"\n  Draft saved: {saved_title}")
+                print("  Run `clauck report --inbox` to submit or discard it.")
+            except (json.JSONDecodeError, OSError):
+                pass
         return
 
     title = draft.get("title", "").strip()
@@ -3210,8 +3417,9 @@ def main() -> None:
         else:
             cmd_mcp()
     elif cmd == "report":
+        inbox_flag = "--inbox" in rest
         tail = " ".join(r for r in rest if not r.startswith("-"))
-        cmd_report(tail)
+        cmd_report(tail, inbox=inbox_flag)
     elif cmd == "work":
         # `clauck work <text>` is an explicit alias for semantic fallthrough,
         # avoiding conflicts if semantic text starts with a subcommand name.
