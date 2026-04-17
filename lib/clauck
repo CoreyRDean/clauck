@@ -1900,7 +1900,10 @@ Reason from the specific context, not from tiers. No two invocations have identi
 - sonnet: $3/M input, $15/M output. Good for investigation that requires synthesis across several files or layered reasoning about state.
 - A single Read of a 100-line log is ~$0.005 on haiku, ~$0.015 on sonnet.
 - Tool-call overhead + system prompt + reasoning padding roughly doubles raw read cost.
-- Typical haiku tool-chain turn lands ~$0.02. Typical sonnet turn ~$0.08.
+- **Per-turn cost grows with turn count — it does not stay flat.** Every tool result remains in context and is re-paid as input tokens on every subsequent turn. Early turns land near the point estimate; later turns pay for accumulated context. Size budgets against these bands, not a flat rate:
+  - haiku: ~$0.02/turn for sessions ≤6 turns; **~$0.035/turn for 7–15 turns; ~$0.05/turn for 15+ turns**.
+  - sonnet: ~$0.08/turn for sessions ≤6 turns; **~$0.12/turn for 7–15 turns; ~$0.18/turn for 15+ turns**.
+- Common trap: a haiku session sized arithmetically at 12 × $0.02 = $0.24 routinely exceeds its budget around turn 8 because growing context outruns the flat rate. The bands above are the correction — apply them whenever you pick a turn count, and pick your budget from `turns × band_rate`, not `turns × point_estimate`.
 
 **Mode implications:**
 - `--dry`: read-heavy, no writes. Usually shorter.
@@ -1921,6 +1924,8 @@ Reason from the specific context, not from tiers. No two invocations have identi
   - *Turn starvation*: the agent DOES apply fixes but the mandated apply+verify cycle inflates turns faster than the interpreter sized. Defeated by: scaling turns with the number of fixes named in the context.
   **Count the distinct fixes in the context above** (each `rm` command, each diff block, each file to edit = one fix). Then: `turns ≥ 2 × fix_count + 5 initial/state-check + 3 slack`. A 2-fix directive: ≥ 12 turns. A 3-fix directive (e.g., edit one file + rm three state files = 4 operations): ≥ 15 turns. A 4-fix directive: ≥ 18 turns. Mandatory: sonnet, medium effort (at minimum), turns from formula, ≥ $0.75. In the `interpretation` field, prefer imperative verbs tied to the specific mutations ("Apply pe-qa directive + rm pe-resolve state files") rather than generic "address findings." Known failures: (a) `clauck doctor --fix "$(cat findings.md)"` on haiku/low returned a restructured summary of the input without executing any Bash or Edit — a silent no-op presented as a completed fix. (b) `clauck doctor --fix "$(cat /tmp/test.md)"` sized at 12 turns on a 2-operation directive (pe-qa Edit + pe-resolve state rm) truncated at max_turns despite correct model/effort — the interpreter underestimated the apply+verify turn tax.
 
+**Anchor precedence — when multiple signals match, higher capability wins.** Real invocations often trigger two or more anchors simultaneously (e.g., "search across logs" AND "multiple subsystems implicated" AND a timing hypothesis to test). When a context matches more than one anchor with different sizing implications, pick the routing with the **higher capability on every dimension**: more capable model, higher effort, more turns, larger budget. Never downshift any dimension because a lighter anchor also matched. Concrete collision to remember: search-across-logs (haiku OK) + multiple subsystems (sonnet) → **sonnet wins**. The multi-subsystem reality does not get cheaper just because the investigation starts with log reads. Known failure: `clauck doctor "intent-miner hasn't posted in 4h … also delegate-scout success history and 5-min-cron timing"` — interpreter routed haiku + $0.25 on the log-search anchor, ignored the two-subsystem signal, budget-exceeded before synthesis.
+
 **Bias:**
 - If you're unsure whether it's small or medium, err medium. Doctor is usually invoked when something is already weird; underprovisioning wastes both runs.
 - If the question is emphatically trivial (user is just sanity-checking), stay small.
@@ -1929,6 +1934,7 @@ Reason from the specific context, not from tiers. No two invocations have identi
 **Hard floors and ceilings** (not targets — guardrails):
 - Minimum: 3 turns, $0.05, haiku. Anything smaller isn't worth spawning a session.
 - Maximum: 60 turns, $3.00, sonnet. Anything bigger is probably the wrong framing — suggest breaking it into multiple invocations in the interpretation field.
+- **Multi-entity haiku exclusion:** if the context names **two or more distinct jobs, subsystems, modules, or pipelines** (e.g., "intent-miner" AND "delegate-scout"; "pe-pipeline" AND "heartbeat"), do **NOT** pick haiku regardless of what the per-anchor rules suggest. Multi-entity investigations require cross-referencing state across independently-maintained contexts — the exact task shape where haiku's shallower synthesis produces either truncated reports or turn-wasting re-reads. Route these to sonnet. **Scaffolding allowlist — these terms do NOT count as a second entity even when paired with a real target:** `scheduler`, `launchd`, `plist`, `the hook` / `hooks`, `the CLI` / `clauck CLI`, `the runtime`, `update-check`, `launch agent`. Rationale: these are the runtime substrate that nearly every substantive question incidentally mentions (e.g., "pe-pipeline is empty — is the scheduler firing it?") — counting them would false-positive every single-target question. Two entities **both outside the allowlist** always trips the exclusion; one real entity plus one allowlisted term does not. **Relationship to the precedence rule above:** when this exclusion fires, model choice is decided here — the precedence rule is the softer tiebreaker for anchor collisions this exclusion does not cover.
 
 # Output
 
