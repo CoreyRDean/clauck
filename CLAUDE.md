@@ -73,7 +73,7 @@ launchd (60s tick) → scheduler.py
 
 | What | Where |
 |---|---|
-| Runtime | `~/.clauck/{scheduler.py,run-job.sh,trigger-job.sh,update-check.sh,dag-runner.py}` |
+| Runtime | `~/.clauck/{scheduler.py,run-job.sh,trigger-job.sh,update-check.sh,dag-runner.py,clauck-mcp}` |
 | Jobs | `~/.clauck/*.md` |
 | Logs | `~/.clauck/<name>-<ts>-<pid>.log` |
 | DAG logs | `~/.clauck/<root>-dag-<ts>-<pid>.log` |

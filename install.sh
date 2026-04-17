@@ -314,6 +314,7 @@ install_files() {
     run mkdir -p "$HOME/.local/bin"
     install_file "$repo/lib/clauck"                   "$HOME/.local/bin/clauck"                     755
     install_file "$repo/lib/dag-runner.py"            "$HOME/.clauck/dag-runner.py"  755
+    install_file "$repo/lib/clauck-mcp"               "$HOME/.clauck/clauck-mcp"     755
     install_file "$repo/lib/prompt.md"                "$HOME/.clauck/prompt.md"      644
     install_file "$repo/lib/scheduled-jobs-notice.sh" "$HOME/.claude/hooks/scheduled-jobs-notice.sh" 755
     # Ship uninstall.sh alongside the runtime so `clauck uninstall` always has
