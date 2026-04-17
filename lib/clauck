@@ -1392,7 +1392,7 @@ def cmd_validate(names: "list[str]", all_jobs: bool = False) -> None:
         n_warnings += nw
 
         if ne == 0 and nw == 0:
-            print(f"  \033[32m✓ all checks passed\033[0m")
+            print("  \033[32m✓ all checks passed\033[0m")
         else:
             parts = []
             if ne:
