@@ -18,7 +18,7 @@ from pathlib import Path
 HOME = Path.home()
 _CLAUCK_FALLBACK = HOME / ".local" / "bin" / "clauck"
 
-SERVER_INFO = {"name": "clauck", "version": "1.0.0"}
+SERVER_INFO = {"name": "clauck", "version": "1.1.0"}
 
 TOOLS = [
     {
@@ -61,14 +61,25 @@ TOOLS = [
     },
     {
         "name": "get_logs",
-        "description": "Fetch recent log output for a clauck job.",
+        "description": (
+            "Fetch recent log metadata for a clauck job. "
+            "Pass `show` to include the full content of the Nth most-recent log inline "
+            "(e.g. show=1 for the latest run's output)."
+        ),
         "inputSchema": {
             "type": "object",
             "properties": {
                 "name": {"type": "string", "description": "Job name"},
                 "last": {
                     "type": "integer",
-                    "description": "Number of recent runs to show (default: 3, max: 20)",
+                    "description": "Number of recent runs to list (default: 5, max: 20)",
+                },
+                "show": {
+                    "type": "integer",
+                    "description": (
+                        "Print the full content of the Nth most-recent log (1 = latest). "
+                        "Omit to return metadata only."
+                    ),
                 },
             },
             "required": ["name"],
@@ -130,6 +141,51 @@ TOOLS = [
             "required": [],
         },
     },
+    {
+        "name": "next_fires",
+        "description": (
+            "Show when each job is next scheduled to fire. "
+            "Returns a table with job names, cron expressions, and human-readable "
+            "next-fire times (e.g. 'in 55m', 'tomorrow 09:00')."
+        ),
+        "inputSchema": {"type": "object", "properties": {}, "required": []},
+    },
+    {
+        "name": "marketplace_info",
+        "description": (
+            "Get full details for a clauck marketplace job before installing: "
+            "version, schedule, estimated cost per run, required MCPs, "
+            "and customization steps."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "name": {
+                    "type": "string",
+                    "description": "Marketplace job name (from marketplace_list)",
+                },
+            },
+            "required": ["name"],
+        },
+    },
+    {
+        "name": "install_job",
+        "description": (
+            "Install a job from the clauck marketplace. "
+            "After installing, the job appears in list_jobs and fires on its schedule. "
+            "Use marketplace_info first to review the job before installing."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "name": {
+                    "type": "string",
+                    "description": "Marketplace job name to install",
+                },
+            },
+            "required": ["name"],
+        },
+    },
 ]
 
 
@@ -167,6 +223,8 @@ def _dispatch(name: str, args: dict) -> str:
         cmd = ["logs", args["name"]]
         if args.get("last"):
             cmd += ["--last", str(int(args["last"]))]
+        if args.get("show"):
+            cmd += ["--show", str(int(args["show"]))]
         return _run(*cmd)
     if name == "inspect_job":
         return _run("inspect", args["name"])
@@ -180,6 +238,12 @@ def _dispatch(name: str, args: dict) -> str:
         if tag:
             cmd.append(tag)
         return _run(*cmd)
+    if name == "next_fires":
+        return _run("next")
+    if name == "marketplace_info":
+        return _run("marketplace", "info", args["name"])
+    if name == "install_job":
+        return _run("install", args["name"])
     return f"error: unknown tool '{name}'"
 
 
