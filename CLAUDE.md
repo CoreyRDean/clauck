@@ -111,6 +111,7 @@ valid_after: "<ISO date>"            # don't fire until this date
 expires_after: "<ISO date>"          # auto-disable after this date
 session_persist: <bool>              # reuse session across runs (--resume)
 interactive: <bool>                  # open Terminal after run for follow-up
+trace_tool_calls: <bool>             # log every tool call (stream-json mode; grep "tool_use")
 tags:                                # freeform categorization
   - <tag1>
   - <tag2>

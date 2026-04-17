@@ -15,6 +15,8 @@
 #                                     dropping the user's full MCP surface from the prompt)
 #   CLAUDE_JOB_DEBOUNCE_SECONDS      (optional; skip this invocation if the job was last started
 #                                     within the window. 0 or unset = no debounce)
+#   CLAUDE_JOB_TRACE_TOOL_CALLS      (sentinel: "1" → use stream-json output so every tool
+#                                     call appears in the log. Grep for "tool_use" to inspect.)
 #   CLAUDE_JOB_CRON           (cron expression; informational)
 #   CLAUDE_JOB_TRIGGER        ("scheduled" or "adhoc"; default "scheduled")
 #   CLAUDE_JOB_FIRED_AT       (ISO8601 UTC timestamp from scheduler; informational)
@@ -46,6 +48,9 @@ MAX_TURNS="${CLAUDE_JOB_MAX_TURNS:-50}"
 MAX_BUDGET_USD="${CLAUDE_JOB_MAX_BUDGET_USD:-2.00}"
 EFFORT="${CLAUDE_JOB_EFFORT:-high}"
 MODEL="${CLAUDE_JOB_MODEL:-}"
+# stream-json when trace_tool_calls is set; tool events appear inline in the log.
+OUTPUT_FORMAT="json"
+[ "${CLAUDE_JOB_TRACE_TOOL_CALLS:-}" = "1" ] && OUTPUT_FORMAT="stream-json"
 DEBOUNCE_SECONDS="${CLAUDE_JOB_DEBOUNCE_SECONDS:-0}"
 CRON_EXPR="${CLAUDE_JOB_CRON:-}"
 TRIGGER="${CLAUDE_JOB_TRIGGER:-manual}"
@@ -371,7 +376,7 @@ CLAUDE_ARGS=(
   --effort "$EFFORT"
   --max-turns "$MAX_TURNS"
   --max-budget-usd "$MAX_BUDGET_USD"
-  --output-format json
+  --output-format "$OUTPUT_FORMAT"
 )
 [ -n "$MODEL" ] && CLAUDE_ARGS+=(--model "$MODEL")
 # Only add --setting-sources if the job explicitly opted in (including setting it
@@ -421,7 +426,7 @@ if [ "$EXIT_CODE" -ne 0 ] && [ "${CLAUDE_JOB_SESSION_PERSIST:-}" = "1" ] && [ -f
       --effort "$EFFORT"
       --max-turns "$MAX_TURNS"
       --max-budget-usd "$MAX_BUDGET_USD"
-      --output-format json
+      --output-format "$OUTPUT_FORMAT"
     )
     [ -n "$MODEL" ] && CLAUDE_ARGS+=(--model "$MODEL")
     [ -n "${CLAUDE_JOB_SETTING_SOURCES_SET:-}" ] && CLAUDE_ARGS+=(--setting-sources "${CLAUDE_JOB_SETTING_SOURCES:-}")
