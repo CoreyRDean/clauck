@@ -12,7 +12,9 @@
 <!-- AGENT: If you're an AI agent, read CLAUDE.md first — it's your primary reference.
      https://raw.githubusercontent.com/CoreyRDean/clauck/main/CLAUDE.md -->
 
-Workflow automation powered by AI agents. Schedule tasks, chain pipelines, react to events, and build automations that think — all from plain English.
+**clauck is a local agent runtime for macOS.** Schedule agent work, react to events, chain pipelines, and build automations that think — all from plain English. Runs as you, on your Mac, with your permissions. No cloud. No sandbox. No permission-gated runtime.
+
+The contract that governs this project lives in [INTENT.md](INTENT.md).
 
 > **Hey Claude, install clauck**
 >
@@ -53,6 +55,8 @@ clauck doctor                        # diagnose issues
 Claude Code is powerful. But you have to be there to use it. **clauck** makes your agent work when you're not — on schedules, in response to events, through multi-step pipelines, and with memory that carries across runs.
 
 It's the difference between a tool you use and an agent that works for you.
+
+**The permission model is the wedge.** clauck runs as you, on your machine, with your permissions. Every competitor runs sandboxed. That's the reason clauck exists and the reason you'd pick it over alternatives. Logs over guardrails. Trust earned via inspectability — every execution logged, every state change visible, every intent traceable. If you don't understand `--dangerously-skip-permissions`, clauck is not for you. If you do, it's designed for you.
 
 ### Simple on the surface
 
