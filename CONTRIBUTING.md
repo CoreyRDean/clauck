@@ -8,6 +8,18 @@ Thanks for considering contributing. This project is young and benefits from imp
 - [SECURITY.md](SECURITY.md) for reporting vulnerabilities.
 - [Marketplace contribution guide](#adding-a-job-to-the-marketplace) below for submitting pre-made jobs.
 
+## Design discipline
+
+Before proposing a non-trivial change, read [INTENT.md](INTENT.md). It defines what clauck is, what it's not, and the decision filter every new capability should pass:
+
+1. **Does this require a local agent runtime, or could it run in a sandbox?** If it could run in a sandbox, it probably belongs somewhere else.
+2. **Does this serve one of the six runtime primitives?** (Accept intent, compile, execute, observe, persist, orchestrate.)
+3. **Does this preserve the non-negotiables and architectural properties?**
+
+PRs that change runtime behavior in ways inconsistent with the contract must either reshape to fit or amend the contract first (see `INTENT.md §8`). Non-trivial PR descriptions should cite which primitive, non-negotiable, or property the change serves — reviewers check this.
+
+Simple bug fixes, marketplace jobs, docs corrections, and typo fixes do not require a citation. Architectural changes do.
+
 ## Development setup
 
 ```bash
