@@ -11,6 +11,7 @@ Usage:
     clauck edit <name>                   Open job prompt in your editor (flat or module)
     clauck edit <module>/<stage>         Edit module internal stage file
     clauck remove <name>                 Delete a job + its state (also: delete, rm)
+    clauck rename <old> <new>            Rename a job, migrating all state atomically (also: mv)
     clauck logs <name> [--last N]        Show recent logs (paths + summary)
     clauck logs <name> --show [N]        Print content of Nth most recent log (default: 1)
     clauck marketplace                    Browse pre-made jobs
@@ -71,7 +72,7 @@ KNOWN_COMMANDS = {
     "list", "status", "fire", "pause", "resume", "edit", "logs",
     "marketplace", "install", "update", "uninstall", "config", "version",
     "doctor", "report", "peek", "work", "mcp",
-    "add", "validate", "inspect", "remove", "delete", "rm", "next",
+    "add", "validate", "inspect", "remove", "delete", "rm", "rename", "mv", "next",
     "-h", "--help", "help",
 }
 
@@ -515,6 +516,73 @@ def cmd_remove(name: str) -> None:
     for r in removed:
         print(f"  removed: {r}")
     print(f"  (logs preserved at {JOBS_DIR}/{name}-*.log)")
+
+
+def cmd_rename(old_name: str, new_name: str) -> None:
+    """Rename a job (flat or module), migrating all state files atomically."""
+    import glob as _glob
+    import re as _re
+    import shutil as _shutil  # noqa: F401 — imported for consistency, unused here
+
+    flat_old = JOBS_DIR / f"{old_name}.md"
+    module_old = JOBS_DIR / old_name
+    flat_new = JOBS_DIR / f"{new_name}.md"
+    module_new = JOBS_DIR / new_name
+
+    if flat_old.exists():
+        is_module = False
+    elif module_old.is_dir() and (module_old / "JOB.md").exists():
+        is_module = True
+    else:
+        die(f"no job found: {old_name}")
+
+    if flat_new.exists() or (module_new.is_dir() and (module_new / "JOB.md").exists()):
+        die(f"job already exists: {new_name} — remove it first or choose a different name")
+
+    if is_module:
+        module_old.rename(module_new)
+    else:
+        flat_old.rename(flat_new)
+        # Update 'name:' frontmatter field if it matches the old name exactly
+        text = flat_new.read_text(encoding="utf-8")
+        text = _re.sub(
+            rf"^(name:\s*){_re.escape(old_name)}(\s*)$",
+            rf"\g<1>{new_name}\g<2>",
+            text, flags=_re.MULTILINE, count=1,
+        )
+        flat_new.write_text(text, encoding="utf-8")
+
+    # Migrate simple state files (rename, not copy)
+    migrated = 0
+    for suffix in ("last-run", "last-start", "session-id", "runs-remaining", "auto-disabled"):
+        src = STATE_DIR / f"{old_name}.{suffix}"
+        if src.exists():
+            src.rename(STATE_DIR / f"{new_name}.{suffix}")
+            migrated += 1
+
+    # Migrate glob-named state files
+    for pat in (
+        f"{old_name}.producer-outputs-*.json",
+        f"{old_name}.trigger-*.json",
+    ):
+        for match in _glob.glob(str(STATE_DIR / pat)):
+            old_p = Path(match)
+            new_p = STATE_DIR / old_p.name.replace(f"{old_name}.", f"{new_name}.", 1)
+            old_p.rename(new_p)
+            migrated += 1
+
+    # Migrate lock directory
+    old_lock = STATE_DIR / f"{old_name}.lock.d"
+    if old_lock.exists():
+        old_lock.rename(STATE_DIR / f"{new_name}.lock.d")
+        migrated += 1
+
+    dst_display = str(module_new) + "/" if is_module else str(flat_new)
+    print(f"  renamed: {old_name} → {new_name}")
+    print(f"  path: {dst_display}")
+    if migrated:
+        print(f"  state: {migrated} file(s) migrated")
+    print("  note: logs remain under old name for audit history")
 
 
 def cmd_edit(name: str) -> None:
@@ -2932,6 +3000,10 @@ def main() -> None:
         cmd_edit(rest[0])
     elif cmd in ("remove", "delete", "rm") and rest:
         cmd_remove(rest[0])
+    elif cmd in ("rename", "mv") and len(rest) >= 2:
+        cmd_rename(rest[0], rest[1])
+    elif cmd in ("rename", "mv"):
+        die(f"usage: clauck {cmd} <old-name> <new-name>")
     elif cmd == "logs" and rest:
         last = 5
         show = 0
