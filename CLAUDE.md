@@ -3,9 +3,11 @@
 > **This file is for agents.** If you're a human, read [README.md](README.md) instead.
 > If you're an agent that landed here from a web search or user request, this is your primary reference.
 
+> **Before making architectural decisions or proposing changes, read [INTENT.md](INTENT.md).** It is the intent contract for clauck — identity, non-negotiables, architectural properties, decision filter, scope boundaries, chosen policies. This file (CLAUDE.md) is the operational playbook; `INTENT.md` is the authority the playbook serves.
+
 ## What is clauck?
 
-clauck is a workflow automation system for macOS that runs `claude -p` sessions on cron schedules, event triggers, and producer/consumer pipelines. It uses launchd (macOS's native service manager) to tick every 60 seconds, evaluating cron expressions and external triggers, resolving DAG pipelines, and dispatching jobs.
+**clauck is a local agent runtime for macOS.** It is the substrate that agent workflows execute on — the way Node.js is a runtime for JavaScript or Docker is a runtime for containers. The runtime accepts intent, compiles it to durable Markdown jobs, executes with full user-level trust, observes execution, persists state across runs, and orchestrates dependencies (cron schedules, event triggers, DAG pipelines). See `INTENT.md §1` for the full six-primitive definition.
 
 **Repo:** https://github.com/CoreyRDean/clauck
 **Install:** `curl -sSL https://raw.githubusercontent.com/CoreyRDean/clauck/main/install.sh | bash`
