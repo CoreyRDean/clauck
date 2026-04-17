@@ -11,7 +11,8 @@ Usage:
     clauck edit <name>                   Open job prompt in your editor (flat or module)
     clauck edit <module>/<stage>         Edit module internal stage file
     clauck remove <name>                 Delete a job + its state (also: delete, rm)
-    clauck logs <name> [--last N]        Show recent logs
+    clauck logs <name> [--last N]        Show recent logs (paths + summary)
+    clauck logs <name> --show [N]        Print content of Nth most recent log (default: 1)
     clauck marketplace                    Browse pre-made jobs
     clauck marketplace info <name>        Show full details for a marketplace job
     clauck marketplace search <query>     Search marketplace by keyword
@@ -597,14 +598,21 @@ def cmd_edit(name: str) -> None:
         print(f"  reset runs counter for: {canonical_name}")
 
 
-def cmd_logs(name: str, last: int = 5) -> None:
+def cmd_logs(name: str, last: int = 5, show: int = 0) -> None:
+    import re as _re
     pattern = f"{name}-[0-9]*.log"
     logs = sorted(JOBS_DIR.glob(pattern), key=lambda p: p.stat().st_mtime, reverse=True)
     if not logs:
         print(f"  no logs found for: {name}")
         return
+    if show:
+        idx = show - 1
+        if idx >= len(logs):
+            print(f"  only {len(logs)} log(s) available for: {name}")
+            return
+        print(logs[idx].read_text(), end="")
+        return
     for log in logs[:last]:
-        # Extract key info from log
         text = log.read_text()
         exit_line = ""
         cost = ""
@@ -612,12 +620,11 @@ def cmd_logs(name: str, last: int = 5) -> None:
             if "exit_code=" in line:
                 exit_line = line.strip()
             if '"total_cost_usd"' in line:
-                import re
-                m = re.search(r'"total_cost_usd":([\d.]+)', line)
+                m = _re.search(r'"total_cost_usd":([\d.]+)', line)
                 if m:
                     cost = f"${float(m.group(1)):.4f}"
         ts = log.stem.split("-", 1)[1] if "-" in log.stem else "?"
-        print(f"  {ts:<30} {exit_line:<25} {cost}")
+        print(f"  {ts:<30} {exit_line:<25} {cost:<10}  {log}")
 
 
 def cmd_marketplace(filter_tag: str = "") -> None:
@@ -2273,12 +2280,22 @@ def main() -> None:
         cmd_remove(rest[0])
     elif cmd == "logs" and rest:
         last = 5
+        show = 0
         if "--last" in rest:
             idx = rest.index("--last")
             if idx + 1 < len(rest):
                 last = int(rest[idx + 1])
             rest = [r for i, r in enumerate(rest) if i != idx and i != idx + 1]
-        cmd_logs(rest[0], last)
+        if "--show" in rest:
+            idx = rest.index("--show")
+            # Optional N after --show; default to 1 (most recent)
+            if idx + 1 < len(rest) and rest[idx + 1].isdigit():
+                show = int(rest[idx + 1])
+                rest = [r for i, r in enumerate(rest) if i != idx and i != idx + 1]
+            else:
+                show = 1
+                rest = [r for i, r in enumerate(rest) if i != idx]
+        cmd_logs(rest[0], last, show)
     elif cmd == "marketplace":
         if rest and rest[0] == "updates":
             cmd_marketplace_updates()
