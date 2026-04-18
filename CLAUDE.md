@@ -107,6 +107,8 @@ Cost is a first-class transparent policy per `INTENT.md §3` non-negotiable #4 a
 
 **Auto-skew** — doctor tracks a `scale_skew` offset in config. When a doctor run hits its budget ceiling, the skew bumps (default +0.05, capped at +0.30); on clean runs it decays. Self-balancing safety net so the formula self-tunes to the user's real workloads without intervention.
 
+**MCP auto-promote** — empirical hard rule: if the user's full MCP surface loads (frontmatter does NOT set `strict_mcp_config: true`, or doctor stage-2 which always loads MCP), haiku auto-promotes to sonnet. The MCP surface (~150k tokens of tool descriptions) regularly approaches haiku's effective working context and triggers compaction loops that burn budget without progress. The promotion is surfaced in the sizing explanation string and via `clauck size <scale>`'s `strict_mcp:` line. To run a job on haiku, either set `strict_mcp_config: true` in frontmatter (the job won't have MCP tools available) or accept the sonnet bump.
+
 **Source of truth** — `lib/sizing.py` is the single implementation. `scheduler.py` and the CLI import from it. Do not introduce parallel cost/sizing logic anywhere else; if you need a different curve, edit `SCALE_PARAMS` or add knobs, don't bypass.
 
 ### Frontmatter schema (complete)

@@ -144,21 +144,57 @@ def scale_to_params(scale: float) -> tuple[str, str, int, float]:
 # ── Budget computation ─────────────────────────────────────────────────────
 
 
+def _promote_for_mcp(
+    model: str, effort: str, turns: int, rate: float
+) -> tuple[str, str, int, float, bool]:
+    """Auto-promote haiku → sonnet when MCP surface is loaded.
+
+    The user's full MCP surface (~150k tokens of tool descriptions) plus
+    settings/plugins overhead regularly approaches haiku's effective working
+    context, triggering compaction loops that burn the budget without making
+    progress. An empirical hard rule: if MCP is not stripped (either via
+    frontmatter `strict_mcp_config: true` or the CLI's `--strict-mcp-config`
+    flag), haiku is not a viable choice — promote to the sonnet band that
+    matches current effort intent.
+
+    Returns (new_model, new_effort, new_turns, new_rate, was_promoted).
+    Turns stays unchanged — we need a bigger MODEL, not more steps. Rate
+    comes from the first sonnet band matching `target_effort`, where haiku
+    `low` maps up to sonnet `medium` (the lightest sonnet tier exists).
+    """
+    if model != "haiku":
+        return model, effort, turns, rate, False
+    target_effort = effort if effort != "low" else "medium"
+    for _ceil, m, eff, _t, r in SCALE_PARAMS:
+        if m == "sonnet" and eff == target_effort:
+            return m, eff, turns, r, True
+    # Fallback: if no matching sonnet band found (shouldn't happen with
+    # current table), return first sonnet band regardless of effort.
+    for _ceil, m, eff, _t, r in SCALE_PARAMS:
+        if m == "sonnet":
+            return m, eff, turns, r, True
+    return model, effort, turns, rate, False  # no sonnet band — keep haiku
+
+
 def compute_sizing(
     scale: float,
     context_tokens: int,
     config: Optional[dict] = None,
+    strict_mcp: bool = False,
 ) -> dict:
     """Derive full sizing from a complexity scale and a rough context size.
 
     Returns a dict with keys:
         model, effort, max_turns, max_budget_usd,
         base_cost, context_cost, headroom, skew_applied, scale_effective,
+        mcp_promoted (bool — True when haiku was auto-promoted to sonnet),
         explanation (human-readable one-liner)
 
     Math:
         effective_scale = clamp(scale + scale_skew, 0, 1)
         (model, effort, turns, rate) = scale_to_params(effective_scale)
+        if not strict_mcp and model == "haiku":
+            (model, effort, turns, rate) = _promote_for_mcp(...)
         growth       = 1 + turns × context_growth_per_turn / 2   (midpoint avg)
         base_cost    = turns × rate × growth
         context_cost = turns × context_tokens × INPUT_RATE_PER_MTOK[model] / 1e6
@@ -169,6 +205,10 @@ def compute_sizing(
     midpoint-average multiplier over a session of N turns: if per-turn input
     grows by G×base each turn, the session-total cost is approximately
     N × base × (1 + N × G / 2), not N × base × (1 + N × G).
+
+    strict_mcp: pass True when the session will run under `--strict-mcp-config`
+    (empty MCP surface). False (default) assumes the user's full MCP surface
+    loads, which triggers the haiku → sonnet auto-promote.
     """
     # DEFAULT_DOCTOR_CONFIG is the single source of truth for fallbacks;
     # using a dict-merge means every key the user hasn't overridden comes
@@ -180,6 +220,12 @@ def compute_sizing(
     skew = float(cfg["scale_skew"] or 0.0)
     effective = _clamp_scale(float(scale) + skew)
     model, effort, turns, rate = scale_to_params(effective)
+
+    # Auto-promote haiku → sonnet when MCP surface is loaded — empirical
+    # rule to avoid haiku's compaction loop on MCP-heavy contexts.
+    model, effort, turns, rate, mcp_promoted = _promote_for_mcp(
+        model, effort, turns, rate
+    ) if not strict_mcp else (model, effort, turns, rate, False)
 
     growth = 1.0 + turns * float(cfg["context_growth_per_turn"]) / 2.0
     base_cost = turns * rate * growth
@@ -197,7 +243,9 @@ def compute_sizing(
     explanation = (
         f"scale={_clamp_scale(float(scale)):.2f}"
         + (f"+skew{skew:+.2f}" if abs(skew) > 1e-9 else "")
-        + f" → {model}/{effort}, {turns} turns, "
+        + f" → {model}/{effort}"
+        + (" (promoted from haiku: MCP loaded)" if mcp_promoted else "")
+        + f", {turns} turns, "
           f"base ${base_cost:.2f}"
         + (f" + ctx ${ctx_cost:.2f}" if ctx_cost >= 0.005 else "")
         + f" × {headroom:.2f} headroom = ${budget:.2f}"
@@ -214,6 +262,7 @@ def compute_sizing(
         "headroom": headroom,
         "skew_applied": skew,
         "scale_effective": effective,
+        "mcp_promoted": mcp_promoted,
         "explanation": explanation,
     }
 
@@ -259,10 +308,21 @@ def resolve_params(
     explicit_turns = fm_turns is not None
     explicit_budget = fm_budget is not None
 
+    # strict_mcp signal drives haiku auto-promote inside compute_sizing —
+    # when the frontmatter sets `strict_mcp_config: true`, the job runs
+    # without the user's MCP surface and haiku is safe. Absent or false,
+    # the full MCP surface loads and haiku is auto-promoted to sonnet.
+    strict_mcp_fm = bool(fm.get("strict_mcp_config", False))
+
     sizing = None
     if has_complexity:
         try:
-            sizing = compute_sizing(float(complexity_raw), int(context_tokens), config)
+            sizing = compute_sizing(
+                float(complexity_raw),
+                int(context_tokens),
+                config,
+                strict_mcp=strict_mcp_fm,
+            )
         except (TypeError, ValueError):
             sizing = None
 
