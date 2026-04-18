@@ -1474,6 +1474,7 @@ def cmd_size(
     scale_raw: str,
     ctx_tokens: int = 0,
     model_override: str = "auto",
+    strict_mcp: bool = False,
 ) -> None:
     """Show what the sizing formula derives for a given complexity scale.
 
@@ -1481,6 +1482,11 @@ def cmd_size(
     Useful when authoring a new job (`clauck size 0.35` tells you the derived
     model/turns/budget before you commit complexity: 0.35 to frontmatter) or
     debugging a surprising doctor sizing.
+
+    By default assumes `strict_mcp=False` — matching the common case where a
+    job loads the user's full MCP surface and haiku auto-promotes to sonnet.
+    Pass --strict-mcp to preview the haiku-eligible derivation for jobs with
+    `strict_mcp_config: true` in their frontmatter.
     """
     try:
         scale = float(scale_raw)
@@ -1490,7 +1496,7 @@ def cmd_size(
         die(f"scale {scale} out of range — must be in [0.0, 1.0]")
 
     cfg = sizing.load_doctor_config()
-    sized = sizing.compute_sizing(scale, int(ctx_tokens), cfg)
+    sized = sizing.compute_sizing(scale, int(ctx_tokens), cfg, strict_mcp=strict_mcp)
 
     if model_override != "auto" and model_override != sized["model"]:
         print(f"  note: formula picked {sized['model']}; your override = {model_override!r}")
@@ -1500,6 +1506,10 @@ def cmd_size(
     print(f"  scale:     {scale}")
     print(f"  skew:      {cfg.get('scale_skew', 0.0):+.2f} "
           f"(effective scale: {sized['scale_effective']:.2f})")
+    print(f"  strict_mcp: {strict_mcp}"
+          + ("  (haiku auto-promote ACTIVE)" if not strict_mcp else "  (haiku eligible)"))
+    if sized.get("mcp_promoted"):
+        print(f"  \u2191 haiku auto-promoted to {sized['model']} — MCP surface is loaded")
     print(f"  model:     {sized['model']}")
     print(f"  effort:    {sized['effort']}")
     print(f"  max_turns: {sized['max_turns']}")
@@ -1915,11 +1925,25 @@ def _validate_job_file(
                 findings.append(("error", f"complexity must be in [0.0, 1.0] (got {c})"))
             else:
                 has_complexity = True
-                sized = sizing.compute_sizing(c, 0, sizing.load_doctor_config())
+                # Route through resolve_params so the validator reports the
+                # same derivation the scheduler will actually produce — the
+                # scheduler reads strict_mcp_config from frontmatter and
+                # passes it through. Prior code called compute_sizing
+                # directly without the flag, so a job with strict_mcp_config:
+                # true would validate as "promoted to sonnet" but actually
+                # run on haiku — validator and runtime disagreed.
+                resolved = sizing.resolve_params(fm, 0, sizing.load_doctor_config())
+                sized_view = resolved.get("sizing") or {}
+                promo_note = (
+                    " [haiku auto-promoted → MCP surface]"
+                    if sized_view.get("mcp_promoted")
+                    else ""
+                )
                 findings.append((
                     "ok",
-                    f"complexity: {c} → derives {sized['model']}/{sized['effort']}, "
-                    f"{sized['max_turns']} turns, ${sized['max_budget_usd']:.2f} budget"
+                    f"complexity: {c} → derives {resolved['model']}/{resolved['effort']}, "
+                    f"{resolved['max_turns']} turns, ${float(resolved['max_budget_usd']):.2f} budget"
+                    f"{promo_note}"
                 ))
         except (ValueError, TypeError):
             findings.append(("error", f"complexity must be a number (got {raw_complexity!r})"))
@@ -2805,7 +2829,12 @@ def cmd_doctor(
         }
 
     interpretation = routing.get("interpretation", "Run diagnostic sweep")
-    sized = sizing.compute_sizing(scale, ctx_tokens, doctor_cfg)
+    # Doctor's stage-2 does NOT pass --strict-mcp-config — the diagnostic
+    # agent needs the user's MCP surface available (for --fix mode to post
+    # Slack escalations, query GitHub, etc.). So strict_mcp=False here,
+    # which lets compute_sizing auto-promote haiku → sonnet to avoid the
+    # compaction loop on MCP-heavy context.
+    sized = sizing.compute_sizing(scale, ctx_tokens, doctor_cfg, strict_mcp=False)
     exec_model = sized["model"]
     exec_effort = sized["effort"]
     exec_max_turns = str(sized["max_turns"])
@@ -4146,24 +4175,43 @@ def main() -> None:
         cmd_peek()
     elif cmd == "size":
         if not rest:
-            die("usage: clauck size <scale> [--ctx N] [--model auto|haiku|sonnet|opus]")
-        size_scale = rest[0]
+            die("usage: clauck size <scale> [--ctx N] [--model auto|haiku|sonnet|opus] [--strict-mcp]")
+        # Parse flags first (accepting them anywhere in the arglist), then
+        # take the first non-flag token as the positional scale. This
+        # allows `clauck size --strict-mcp 0.5` and `clauck size 0.5 --strict-mcp`
+        # to behave identically; the prior code took rest[0] verbatim and
+        # died with a spurious "expected float" when the flag was first.
+        size_strict_mcp = "--strict-mcp" in rest
         size_ctx = 0
         size_model = "auto"
-        i = 1
+        positionals: list[str] = []
+        i = 0
         while i < len(rest):
-            if rest[i] == "--ctx" and i + 1 < len(rest):
+            tok = rest[i]
+            if tok == "--strict-mcp":
+                i += 1
+            elif tok == "--ctx" and i + 1 < len(rest):
                 try:
                     size_ctx = int(rest[i + 1])
                 except ValueError:
                     die(f"--ctx expects an integer, got {rest[i + 1]!r}")
                 i += 2
-            elif rest[i] == "--model" and i + 1 < len(rest):
+            elif tok == "--model" and i + 1 < len(rest):
                 size_model = rest[i + 1]
                 i += 2
+            elif not tok.startswith("--"):
+                positionals.append(tok)
+                i += 1
             else:
                 i += 1
-        cmd_size(size_scale, ctx_tokens=size_ctx, model_override=size_model)
+        if not positionals:
+            die("usage: clauck size <scale> [--ctx N] [--model auto|haiku|sonnet|opus] [--strict-mcp]")
+        cmd_size(
+            positionals[0],
+            ctx_tokens=size_ctx,
+            model_override=size_model,
+            strict_mcp=size_strict_mcp,
+        )
     elif cmd == "add" and rest:
         add_path = ""
         add_name = ""

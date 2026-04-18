@@ -578,6 +578,43 @@ max_turns: 30    # override: this job consistently benefits from more turns
 
 Edit: `clauck config doctor scale_skew 0.1` (set) / `clauck config doctor` (view all).
 
+### MCP auto-promote (haiku ineligible when MCP loaded)
+
+Empirical hard rule in `sizing.py`: **haiku is not a viable choice when the user's full MCP surface is loaded.** Tool descriptions across a typical MCP surface total ~150k tokens — combined with system prompts and tool results, this regularly exceeds haiku's effective working context and sends sessions into a compaction loop that burns budget without progress.
+
+A job promotes automatically to sonnet if its frontmatter lacks `strict_mcp_config: true`:
+
+```yaml
+# no strict_mcp_config → scale 0.20 derives haiku → auto-promotes to sonnet
+complexity: 0.20
+```
+
+To keep haiku for cost, strip MCP explicitly:
+
+```yaml
+complexity: 0.20
+strict_mcp_config: true    # skip MCP surface; haiku stays selected
+```
+
+**Promotion mapping** (what the original band becomes when the bump fires):
+
+| Original (derived) | Promoted to |
+|---|---|
+| haiku / low | sonnet / medium  *(no sonnet/low band exists)* |
+| haiku / medium | sonnet / medium |
+| haiku / high | sonnet / high |
+
+Turns stay pinned to the scale-derived value — the task complexity hasn't changed, only the context-fit concern.
+
+Preview either path with `clauck size`:
+
+```
+clauck size 0.20               # default: strict_mcp=False → sonnet
+clauck size 0.20 --strict-mcp  # haiku-eligible derivation
+```
+
+Doctor's stage-2 diagnostic session does NOT pass `--strict-mcp-config` (the agent needs MCP tools for `--fix` actions), so doctor runs auto-promote any haiku-tier scale up to sonnet.
+
 ### Auto-skew (self-tuning)
 
 When a doctor run hits `Reached maximum budget`, `scale_skew` bumps by `auto_skew_increment`, capped at `auto_skew_cap`. On clean (non-truncated) doctor runs, skew decays by half the increment, floored at 0. Self-balancing: raises when truncation happens, relaxes when things stabilize. Manual reset: `clauck config doctor scale_skew 0`.
