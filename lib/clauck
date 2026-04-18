@@ -717,7 +717,7 @@ def _active_dag_log(name: str) -> "Path | None":
     )
     for log in logs:
         text = log.read_text()
-        if "exit_code=" in text:
+        if "--- exit_code=" in text:
             continue
         for line in text.splitlines()[:6]:
             if line.startswith("pid="):
@@ -746,9 +746,9 @@ def _follow_dag_log(path: "Path") -> None:
             layer = payload.get("layer", "?")
             exit_code = payload.get("exit_code")
             cost = payload.get("cost")
-            if event == "start":
+            if event == "started":
                 return f"  -> [layer {layer}] starting: {job}"
-            if event in ("complete", "done"):
+            if event in ("completed", "done"):
                 suffix = ""
                 if exit_code is not None:
                     suffix += f"  exit={exit_code}"
@@ -766,13 +766,13 @@ def _follow_dag_log(path: "Path") -> None:
         content = fh.read()
         for line in content.splitlines():
             print(_annotate(line), flush=True)
-        done = "exit_code=" in content
+        done = "--- exit_code=" in content
         while not done:
             chunk = fh.read()
             if chunk:
                 for line in chunk.splitlines():
                     print(_annotate(line), flush=True)
-                if "exit_code=" in chunk:
+                if "--- exit_code=" in chunk:
                     done = True
             else:
                 _time.sleep(0.3)
