@@ -36,6 +36,7 @@ Usage:
                                          to submit when run interactively.
                                          No args: interactive intent-mining session.
                                          --inbox: review pending drafts from prior sessions.
+    clauck cost [<name>] [--days N] [--all]  Spend summary from job run logs
     clauck peek                          Live-tail all job logs (Ctrl+C to stop)
     clauck mcp                           Start the MCP stdio server
     clauck mcp --install                 Register MCP server in Claude Desktop and Claude Code
@@ -77,6 +78,7 @@ KNOWN_COMMANDS = {
     "marketplace", "install", "update", "uninstall", "config", "version",
     "doctor", "report", "peek", "work", "mcp",
     "add", "validate", "inspect", "remove", "delete", "rm", "rename", "mv", "next",
+    "cost",
     "-h", "--help", "help",
 }
 
@@ -369,6 +371,102 @@ def cmd_status() -> None:
             print(f"  UPDATE AVAILABLE: {upd.get('installed')} → {upd.get('latest')}")
         except (OSError, ValueError):
             pass
+
+
+def _age_str(ts: "datetime", now: "datetime") -> str:
+    """Format a UTC timestamp as a human-readable age string (e.g. '5m ago')."""
+    delta = now - ts
+    secs = int(delta.total_seconds())
+    if secs < 60:
+        return f"{secs}s ago"
+    if secs < 3600:
+        return f"{secs // 60}m ago"
+    if secs < 86400:
+        return f"{secs // 3600}h ago"
+    return f"{secs // 86400}d ago"
+
+
+def cmd_cost(name: str = "", days: int = 30, all_time: bool = False) -> None:
+    """Show spend aggregated from job run logs."""
+    import re as _re
+
+    log_pat = _re.compile(r'^(.+?)-(\d{8}T\d{6}Z)-\d+\.log$')
+    result_pat = _re.compile(r'"total_cost_usd":([\d.]+)')
+    reason_pat = _re.compile(r'"terminal_reason":"([^"]+)"')
+
+    now = datetime.now(timezone.utc)
+    cutoff = None if all_time else now - timedelta(days=days)
+
+    stats: dict[str, dict] = {}
+
+    for log_file in JOBS_DIR.glob("*-[0-9]*T[0-9]*Z-[0-9]*.log"):
+        m = log_pat.match(log_file.name)
+        if not m:
+            continue
+        job_name, ts_str = m.group(1), m.group(2)
+        if job_name.endswith("-dag"):
+            continue
+        if name and job_name != name:
+            continue
+        try:
+            ts = datetime.strptime(ts_str, "%Y%m%dT%H%M%SZ").replace(tzinfo=timezone.utc)
+        except ValueError:
+            continue
+        if cutoff and ts < cutoff:
+            continue
+
+        spend = None
+        terminal_reason = "unknown"
+        try:
+            with open(log_file) as f:
+                for line in f:
+                    mc = result_pat.search(line)
+                    mr = reason_pat.search(line)
+                    if mc:
+                        spend = float(mc.group(1))
+                    if mr:
+                        terminal_reason = mr.group(1)
+        except OSError:
+            continue
+
+        if spend is None:
+            continue
+
+        if job_name not in stats:
+            stats[job_name] = {"runs": 0, "spend": 0.0, "failures": 0, "last_ts": None}
+        s = stats[job_name]
+        s["runs"] += 1
+        s["spend"] += spend
+        if terminal_reason != "completed":
+            s["failures"] += 1
+        if s["last_ts"] is None or ts > s["last_ts"]:
+            s["last_ts"] = ts
+
+    if not stats:
+        period = "all time" if all_time else f"last {days} days"
+        print(f"  no log data found ({period})")
+        return
+
+    sorted_stats = sorted(stats.items(), key=lambda x: x[1]["spend"], reverse=True)
+
+    w = 22
+    print(f"  {'job':<{w}} {'runs':>5}  {'spend':>10}  {'avg/run':>8}  {'fails':>5}  last run")
+    print(f"  {'─'*w}  {'─'*5}  {'─'*10}  {'─'*8}  {'─'*5}  {'─'*8}")
+    total_spend = 0.0
+    total_runs = 0
+    for n, s in sorted_stats:
+        avg = s["spend"] / s["runs"]
+        last = _age_str(s["last_ts"], now)
+        fail_str = str(s["failures"]) if s["failures"] else "-"
+        display_name = (n[:w - 1] + "…") if len(n) > w else n
+        print(f"  {display_name:<{w}}  {s['runs']:>5}  ${s['spend']:>9.4f}  ${avg:>7.4f}  {fail_str:>5}  {last}")
+        total_spend += s["spend"]
+        total_runs += s["runs"]
+
+    print(f"  {'─'*w}  {'─'*5}  {'─'*10}  {'─'*8}")
+    print(f"  {'total':<{w}}  {total_runs:>5}  ${total_spend:>9.4f}")
+    period = "all time" if all_time else f"last {days} days"
+    print(f"\n  period: {period}")
 
 
 def cmd_fire(name: str, extra_args: list[str] | None = None) -> None:
@@ -3643,6 +3741,22 @@ def main() -> None:
         inbox_flag = "--inbox" in rest
         tail = " ".join(r for r in rest if not r.startswith("-"))
         cmd_report(tail, inbox=inbox_flag)
+    elif cmd == "cost":
+        all_time = "--all" in rest
+        days = 30
+        cost_rest = list(rest)
+        if "--days" in cost_rest:
+            idx = cost_rest.index("--days")
+            if idx + 1 < len(cost_rest):
+                try:
+                    days = int(cost_rest[idx + 1])
+                except ValueError:
+                    die("--days requires an integer")
+                cost_rest = [r for i, r in enumerate(cost_rest) if i != idx and i != idx + 1]
+            else:
+                cost_rest = [r for i, r in enumerate(cost_rest) if i != idx]
+        job_filter = next((r for r in cost_rest if not r.startswith("-")), "")
+        cmd_cost(name=job_filter, days=days, all_time=all_time)
     elif cmd == "work":
         # `clauck work <text>` is an explicit alias for semantic fallthrough,
         # avoiding conflicts if semantic text starts with a subcommand name.
