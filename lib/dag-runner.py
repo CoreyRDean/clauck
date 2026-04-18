@@ -32,6 +32,7 @@ from pathlib import Path
 HOME = Path(os.environ.get("HOME", str(Path.home())))
 JOBS_DIR = HOME / ".clauck"
 STATE_DIR = JOBS_DIR / ".state"
+INVOCATION_DIR = STATE_DIR / ".dag-invocations"
 MANIFEST_PATH = JOBS_DIR / ".manifest.json"
 RUN_JOB = JOBS_DIR / "run-job.sh"
 TRIGGER_JOB = JOBS_DIR / "trigger-job.sh"
@@ -39,6 +40,7 @@ DISPATCH_LOG = JOBS_DIR / ".scheduler-dispatch.log"
 _DISPATCH_LOG_MAX_BYTES = 100 * 1024
 
 DEFAULT_TIMEOUT = 600  # 10 minutes
+INVOCATION_TTL_HOURS = 72  # mirrors BROKEN_RETENTION_HOURS in clauck CLI
 
 
 def _open_dispatch_log():
@@ -266,6 +268,53 @@ class CycleError(Exception):
 
 class MissingJobError(Exception):
     pass
+
+
+# ---------- durable invocation state ----------
+
+def _invocation_state_path(invocation_id: str) -> Path:
+    return INVOCATION_DIR / f"{invocation_id}.json"
+
+
+def write_invocation_state(state: dict) -> None:
+    """Persist DAG invocation state atomically so a tripped node can resume."""
+    INVOCATION_DIR.mkdir(parents=True, exist_ok=True)
+    state["updated_at"] = datetime.now(timezone.utc).isoformat()
+    path = _invocation_state_path(state["invocation_id"])
+    tmp = path.with_suffix(".json.tmp")
+    tmp.write_text(json.dumps(state, indent=2), encoding="utf-8")
+    os.replace(tmp, path)
+
+
+def read_invocation_state(invocation_id: str) -> dict | None:
+    path = _invocation_state_path(invocation_id)
+    if not path.exists():
+        return None
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+
+
+def delete_invocation_state(invocation_id: str) -> None:
+    try:
+        _invocation_state_path(invocation_id).unlink(missing_ok=True)
+    except OSError:
+        pass
+
+
+def invocation_state_age_hours(state: dict) -> float:
+    ts = state.get("updated_at") or state.get("started_at")
+    if not ts:
+        return 0.0
+    try:
+        when = datetime.fromisoformat(ts)
+        if when.tzinfo is None:
+            when = when.replace(tzinfo=timezone.utc)
+        delta = datetime.now(timezone.utc) - when
+        return delta.total_seconds() / 3600.0
+    except ValueError:
+        return 0.0
 
 
 # ---------- lock management ----------
@@ -538,9 +587,17 @@ def deliver_to_consumers(
 # ---------- DAG execution ----------
 
 def execute_dag(
-    root_name: str, invocation_id: str, logger: DagLogger
+    root_name: str, invocation_id: str, logger: DagLogger,
+    resumed_from: dict | None = None,
 ) -> int:
-    """Main DAG execution loop. Returns exit code (0 = success)."""
+    """Main DAG execution loop. Returns exit code (0 = success).
+
+    When `resumed_from` is provided (output of read_invocation_state), skip
+    jobs whose names already appear in `completed` and reuse their stored
+    results for producer-output injection. This delivers true mid-DAG resume:
+    completed work is not re-run; the tripped node picks up via its revive
+    override (written separately by the CLI); downstream layers continue.
+    """
 
     logger.log("loading job configs...")
     configs = load_job_configs()
@@ -563,15 +620,48 @@ def execute_dag(
     # Build per-producer timeout map from the root's producer declarations.
     timeout_map = _build_timeout_map(root_name, configs)
 
-    # Accumulate results keyed by job name.
+    # Accumulate results keyed by job name. Seed with prior completions on resume.
     all_results: dict[str, dict] = {}
+    if resumed_from:
+        prior = resumed_from.get("completed", {}) or {}
+        all_results.update(prior)
+        logger.log(
+            f"resuming invocation {invocation_id}: "
+            f"{len(prior)} completed nodes carried forward "
+            f"({', '.join(sorted(prior)) or 'none'})"
+        )
+
+    # Persist initial invocation state so a mid-run trip is recoverable.
+    inv_state = {
+        "invocation_id": invocation_id,
+        "root": root_name,
+        "started_at": (resumed_from or {}).get(
+            "started_at", datetime.now(timezone.utc).isoformat()
+        ),
+        "layers": layers,
+        "tree_members": sorted(tree_members),
+        "completed": dict(all_results),
+        "status": "running",
+    }
+    write_invocation_state(inv_state)
 
     # Execute layers bottom-up (layer 0 = roots with no producers).
     for layer_idx, layer in enumerate(layers):
-        logger.log(f"--- executing layer {layer_idx}: {layer} ---")
+        # Skip jobs that already completed in a prior (pre-trip) run.
+        pending = [j for j in layer if j not in all_results]
+        if not pending:
+            logger.log(f"--- layer {layer_idx} already complete (resume): {layer} ---")
+            continue
+
+        logger.log(
+            f"--- executing layer {layer_idx}: {pending}"
+            + (f" (skipped already-complete: {[j for j in layer if j not in pending]})"
+               if len(pending) != len(layer) else "")
+            + " ---"
+        )
 
         # Inject producer outputs for jobs in this layer that have producers.
-        for job_name in layer:
+        for job_name in pending:
             producers = _get_producers(configs.get(job_name, {}))
             if producers:
                 producer_results = {}
@@ -589,19 +679,19 @@ def execute_dag(
                         logger.oplog, logger,
                     )
 
-        # Execute all jobs in this layer in parallel.
+        # Execute all pending jobs in this layer in parallel.
         layer_results: dict[str, dict] = {}
-        if len(layer) == 1:
+        if len(pending) == 1:
             # Single job — no thread pool overhead.
-            job_name = layer[0]
+            job_name = pending[0]
             timeout = timeout_map.get(job_name, DEFAULT_TIMEOUT)
             layer_results[job_name] = execute_job(
                 job_name, configs, invocation_id, logger, layer_idx, timeout,
             )
         else:
-            with ThreadPoolExecutor(max_workers=len(layer)) as executor:
+            with ThreadPoolExecutor(max_workers=len(pending)) as executor:
                 futures = {}
-                for job_name in layer:
+                for job_name in pending:
                     timeout = timeout_map.get(job_name, DEFAULT_TIMEOUT)
                     future = executor.submit(
                         execute_job,
@@ -625,6 +715,20 @@ def execute_dag(
 
         all_results.update(layer_results)
 
+        # Persist progress after every layer so a mid-DAG trip is recoverable.
+        # Store only the fields needed for resume (results) — not log-path-only noise.
+        inv_state["completed"] = {
+            n: {
+                "result": r.get("result", ""),
+                "exit_code": r.get("exit_code", 0),
+                "cost": r.get("cost", 0.0),
+                "log_path": r.get("log_path", ""),
+                "duration_ms": r.get("duration_ms", 0),
+            }
+            for n, r in all_results.items()
+            if r.get("exit_code", 1) == 0
+        }
+
         # Check for failures — abort if any job in the layer failed.
         failed = [
             name for name, res in layer_results.items()
@@ -635,18 +739,31 @@ def execute_dag(
                 f"layer {layer_idx} had failures: "
                 + ", ".join(f"{n} (exit={layer_results[n]['exit_code']})" for n in failed)
             )
-            logger.log("aborting DAG execution due to layer failure")
-            # Deliver to consumers for any completed nodes (best-effort).
+            logger.log(
+                f"aborting DAG execution due to layer failure; "
+                f"invocation state preserved at {_invocation_state_path(invocation_id)} "
+                f"(revive with: clauck revive <failed-job>)"
+            )
+            # Deliver to consumers for any completed nodes in THIS layer only
+            # (prior layers already delivered when they completed).
             for name in layer_results:
                 if layer_results[name]["exit_code"] == 0:
                     deliver_to_consumers(name, configs, tree_members, logger)
+            inv_state["status"] = "failed"
+            inv_state["failed_layer"] = layer_idx
+            inv_state["failed_jobs"] = failed
+            write_invocation_state(inv_state)
             return 1
 
         # Deliver to consumers for all successfully completed nodes in this layer.
-        for job_name in layer:
+        # On resume, only newly-completed nodes are in `pending`; already-completed
+        # ones triggered consumers during the original run — don't double-fire.
+        for job_name in pending:
             deliver_to_consumers(job_name, configs, tree_members, logger)
 
-    # All layers complete — write final summary.
+        write_invocation_state(inv_state)
+
+    # All layers complete — write final summary and clean up invocation state.
     total_cost = sum(r["cost"] for r in all_results.values())
     total_duration = sum(r["duration_ms"] for r in all_results.values())
     logger.log(
@@ -654,6 +771,10 @@ def execute_dag(
         f"total_cost=${total_cost:.4f}, "
         f"total_duration={total_duration}ms"
     )
+    inv_state["status"] = "complete"
+    inv_state["completed_at"] = datetime.now(timezone.utc).isoformat()
+    write_invocation_state(inv_state)
+    delete_invocation_state(invocation_id)
 
     return 0
 
@@ -697,10 +818,43 @@ def _build_timeout_map(root_name: str, configs: dict[str, dict]) -> dict[str, in
 def main() -> None:
     if len(sys.argv) < 2:
         print(
-            "usage: dag-runner.py <root-job-name> [--invocation-id <uuid>]",
+            "usage: dag-runner.py <root-job-name> [--invocation-id <uuid>]\n"
+            "       dag-runner.py --resume <invocation-id>",
             file=sys.stderr,
         )
         sys.exit(2)
+
+    # --resume <invocation-id>: rehydrate state and continue from the failure point.
+    if sys.argv[1] == "--resume":
+        if len(sys.argv) < 3:
+            print("--resume requires <invocation-id>", file=sys.stderr)
+            sys.exit(2)
+        invocation_id = sys.argv[2]
+        state = read_invocation_state(invocation_id)
+        if state is None:
+            print(f"no invocation state for {invocation_id}", file=sys.stderr)
+            sys.exit(4)
+        age_h = invocation_state_age_hours(state)
+        if age_h > INVOCATION_TTL_HOURS:
+            print(
+                f"invocation {invocation_id} is {age_h:.1f}h old "
+                f"(TTL: {INVOCATION_TTL_HOURS}h) — upstream promises likely expired",
+                file=sys.stderr,
+            )
+            sys.exit(5)
+        root_name = state["root"]
+        STATE_DIR.mkdir(parents=True, exist_ok=True)
+        logger = DagLogger(root_name, invocation_id)
+        logger.log(f"RESUME: root={root_name} invocation_id={invocation_id} age={age_h:.2f}h")
+        try:
+            exit_code = execute_dag(root_name, invocation_id, logger, resumed_from=state)
+        except Exception as e:
+            logger.log_error(f"fatal during resume: {e}")
+            import traceback
+            logger.log(traceback.format_exc())
+            exit_code = 99
+        logger.finalize(exit_code)
+        sys.exit(exit_code)
 
     root_name = sys.argv[1]
 

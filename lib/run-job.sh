@@ -557,7 +557,8 @@ fi
 if [ "$EXIT_CODE" -ne 0 ]; then
   /usr/bin/python3 - \
       "${JOB_NAME}" "${LOG_FILE}" "${JOBS_DIR}/.broken" \
-      "${MAX_TURNS:-50}" "${MAX_BUDGET_USD:-2.0}" << 'PYEOF_BROKEN' 2>/dev/null || true
+      "${MAX_TURNS:-50}" "${MAX_BUDGET_USD:-2.0}" \
+      "${CLAUDE_DAG_INVOCATION_ID:-}" "${CLAUDE_DAG_ROOT:-}" << 'PYEOF_BROKEN' 2>/dev/null || true
 import json, os, sys
 from datetime import datetime, timezone
 
@@ -566,6 +567,8 @@ log_file   = sys.argv[2] if len(sys.argv) > 2 else ""
 broken_dir = sys.argv[3] if len(sys.argv) > 3 else ""
 orig_turns = int(sys.argv[4]) if len(sys.argv) > 4 else 50
 orig_budget = float(sys.argv[5]) if len(sys.argv) > 5 else 2.0
+dag_invocation_id = sys.argv[6] if len(sys.argv) > 6 else ""
+dag_root          = sys.argv[7] if len(sys.argv) > 7 else ""
 
 TRIP_REASONS = {"max_turns", "max_budget", "budget_exceeded"}
 
@@ -608,6 +611,13 @@ tombstone = {
     "orig_max_budget_usd": orig_budget,
     "spend_usd": spend,
 }
+# DAG context (present only when tripped inside a pipeline run).
+# Enables `clauck revive` to resume the full DAG from the tripped node via
+# `dag-runner.py --resume <invocation_id>` rather than just re-running the
+# single node and losing upstream promise delivery.
+if dag_invocation_id:
+    tombstone["dag_invocation_id"] = dag_invocation_id
+    tombstone["dag_root"] = dag_root
 with open(tombstone_path, "w") as f:
     json.dump(tombstone, f, indent=2)
 PYEOF_BROKEN

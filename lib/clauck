@@ -1608,7 +1608,13 @@ def cmd_broken() -> None:
 
 
 def cmd_revive(name: str, budget: float | None = None, turns: int | None = None) -> None:
-    """Resume a broken job session as a non-interactive background job."""
+    """Resume a broken job session as a non-interactive background job.
+
+    If the tombstone carries DAG context (dag_invocation_id), route the resume
+    through dag-runner.py --resume so the tripped node picks up where it left
+    off AND the pipeline continues to downstream nodes, delivering upstream
+    promises. Falls back to solo revive when DAG state is missing or expired.
+    """
     stone = _find_tombstone(name)
     if stone is None:
         print(f"  no broken tombstone found for: {name}", file=sys.stderr)
@@ -1629,6 +1635,7 @@ def cmd_revive(name: str, budget: float | None = None, turns: int | None = None)
         sys.exit(1)
 
     run_job = JOBS_DIR / "run-job.sh"
+    dag_runner = JOBS_DIR / "dag-runner.py"
     if not run_job.exists():
         print(f"  run-job.sh not found at {run_job}", file=sys.stderr)
         sys.exit(1)
@@ -1641,7 +1648,28 @@ def cmd_revive(name: str, budget: float | None = None, turns: int | None = None)
     new_budget = budget if budget is not None else round(orig_budget * 2, 2)
     new_turns = turns if turns is not None else orig_turns * 2
 
-    # Fetch current consumers from the manifest so the revived job can chain them.
+    # DAG context: if the node tripped mid-pipeline, we can do true DAG resume.
+    dag_invocation_id = stone.get("dag_invocation_id", "")
+    dag_root = stone.get("dag_root", "")
+    dag_resume_path: Path | None = None
+    dag_resume_expired = False
+    if dag_invocation_id:
+        dag_resume_path = STATE_DIR / ".dag-invocations" / f"{dag_invocation_id}.json"
+        if dag_resume_path.exists():
+            # Check TTL on the invocation state itself (mirror tombstone retention).
+            try:
+                inv_age_sec = datetime.now().timestamp() - dag_resume_path.stat().st_mtime
+                if inv_age_sec > BROKEN_RETENTION_HOURS * 3600:
+                    dag_resume_expired = True
+                    dag_resume_path = None
+            except OSError:
+                dag_resume_path = None
+        else:
+            dag_resume_path = None
+
+    # Fetch current consumers from the manifest so the revived job can chain them
+    # (only used on the solo-revive fallback path; during DAG resume, dag-runner.py
+    # handles consumer delivery as it completes remaining layers).
     consumers: list[str] = []
     try:
         m = load_manifest()
@@ -1656,7 +1684,16 @@ def cmd_revive(name: str, budget: float | None = None, turns: int | None = None)
     print(f"  reviving '{name}' as background job (tripped: {trip_reason}, spent: {spend_str})")
     print(f"  session: {session_id[:36]}")
     print(f"  budget: ${orig_budget} → ${new_budget}  turns: {orig_turns} → {new_turns}")
-    if consumers:
+    if dag_resume_path and dag_runner.exists():
+        print(f"  dag resume: {dag_root} (invocation {dag_invocation_id[:8]}) — "
+              f"completed upstream preserved, pipeline will continue")
+    elif dag_invocation_id and dag_resume_expired:
+        print(f"  dag context present but invocation state expired — "
+              f"resuming node only; upstream promises considered dead")
+    elif dag_invocation_id and not dag_runner.exists():
+        print(f"  dag context present but dag-runner.py missing — "
+              f"resuming node only; upstream promises not delivered")
+    elif consumers:
         print(f"  consumers queued on success: {', '.join(consumers)}")
     print()
 
@@ -1668,26 +1705,44 @@ def cmd_revive(name: str, budget: float | None = None, turns: int | None = None)
             pass
 
     # Write the revive override file; run-job.sh reads it once at startup and deletes it.
-    # This injects --resume <session_id> and augmented limits without going through
-    # scheduler.py --trigger (which would re-run producers on pipeline nodes).
+    # This injects --resume <session_id> and augmented limits. When dag-runner.py drives
+    # execution (DAG resume path), consumers are handled by dag-runner — so we leave the
+    # consumers list empty to prevent double-firing.
     STATE_DIR.mkdir(parents=True, exist_ok=True)
     revive_path = STATE_DIR / f"{name}.revive.json"
     revive_path.write_text(json.dumps({
         "session_id": session_id,
         "max_budget_usd": new_budget,
         "max_turns": new_turns,
-        "consumers": consumers,
+        "consumers": [] if dag_resume_path else consumers,
     }))
 
-    subprocess.Popen(
-        ["zsh", str(run_job), name],
-        env={**os.environ, "CLAUDE_JOB_TRIGGER": "revive"},
-        stdin=subprocess.DEVNULL,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-        start_new_session=True,
-    )
-    print(f"  tail logs with: clauck logs {name} --show")
+    if dag_resume_path and dag_runner.exists():
+        # True DAG resume: dag-runner.py loads invocation state, skips completed
+        # layers, re-runs the tripped node (which picks up revive overrides from
+        # run-job.sh), and continues the pipeline to deliver upstream promises.
+        subprocess.Popen(
+            ["/usr/bin/python3", str(dag_runner), "--resume", dag_invocation_id],
+            env={**os.environ, "CLAUDE_JOB_TRIGGER": "revive-dag"},
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            start_new_session=True,
+        )
+        print(f"  tail dag log with: clauck logs {dag_root} --follow")
+    else:
+        # Solo revive: bypass scheduler.py --trigger (which would re-run producers
+        # on pipeline nodes); run this single node non-interactively and let
+        # run-job.sh chain directly-declared consumers on success.
+        subprocess.Popen(
+            ["zsh", str(run_job), name],
+            env={**os.environ, "CLAUDE_JOB_TRIGGER": "revive"},
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            start_new_session=True,
+        )
+        print(f"  tail logs with: clauck logs {name} --show")
 
 
 def cmd_discard(name: str) -> None:
