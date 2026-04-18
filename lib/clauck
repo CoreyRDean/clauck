@@ -437,6 +437,16 @@ def cmd_cost(name: str = "", days: int = 30, all_time: bool = False) -> None:
     now = datetime.now(timezone.utc)
     cutoff = None if all_time else now - timedelta(days=days)
 
+    # Load known job names once so we can tell apart a DAG orchestration log
+    # (e.g. standup-dag-<ts>.log, where standup is a real job) from a log
+    # produced by a job that happens to be named foo-dag.
+    known_jobs: "set[str]" = set()
+    if MANIFEST.exists():
+        try:
+            known_jobs = {j["name"] for j in json.loads(MANIFEST.read_text()).get("jobs", [])}
+        except (ValueError, KeyError):
+            pass
+
     stats: dict[str, dict] = {}
 
     for log_file in JOBS_DIR.glob("*-[0-9]*T[0-9]*Z-[0-9]*.log"):
@@ -444,7 +454,9 @@ def cmd_cost(name: str = "", days: int = 30, all_time: bool = False) -> None:
         if not m:
             continue
         job_name, ts_str = m.group(1), m.group(2)
-        if job_name.endswith("-dag"):
+        # Skip DAG orchestration logs only when the -dag suffix is not itself a
+        # real job name — a job named e.g. "standup-dag" should not be excluded.
+        if job_name.endswith("-dag") and job_name not in known_jobs:
             continue
         if name and job_name != name:
             continue
@@ -1053,6 +1065,15 @@ def cmd_history(
     """Cross-job invocation timeline sorted by most recent first."""
     import re as _re
 
+    # Load known job names so -dag-suffix logs from real jobs named foo-dag
+    # are not misclassified as DAG orchestration logs.
+    known_jobs: "set[str]" = set()
+    if MANIFEST.exists():
+        try:
+            known_jobs = {j["name"] for j in json.loads(MANIFEST.read_text()).get("jobs", [])}
+        except (ValueError, KeyError):
+            pass
+
     # Glob all log files, sorted newest first by mtime
     logs = sorted(JOBS_DIR.glob("*-[0-9]*.log"), key=lambda p: p.stat().st_mtime, reverse=True)
 
@@ -1063,8 +1084,10 @@ def cmd_history(
 
     summaries = []
     for log in logs:
-        # Skip DAG orchestration logs — they describe pipeline coordination, not job runs
-        if _re.search(r"-dag-\d{8}T\d{6}Z-\d+\.log$", log.name):
+        # Skip DAG orchestration logs — they describe pipeline coordination, not
+        # job runs. But don't skip logs from a real job named foo-dag.
+        m_dag = _re.search(r"^(.+)-dag-\d{8}T\d{6}Z-\d+\.log$", log.name)
+        if m_dag and m_dag.group(1) + "-dag" not in known_jobs:
             continue
         if cutoff_mtime and log.stat().st_mtime < cutoff_mtime:
             # Logs are sorted newest-first; once we go past the cutoff we're done
@@ -4085,6 +4108,8 @@ def main() -> None:
             idx = rest.index("--tag")
             if idx + 1 < len(rest):
                 tag_filter = rest[idx + 1]
+            else:
+                die("--tag requires a value")
         cmd_list(tag_filter=tag_filter)
     elif cmd == "next":
         cmd_next()
@@ -4096,7 +4121,14 @@ def main() -> None:
         if "--last" in rest:
             idx = rest.index("--last")
             if idx + 1 < len(rest):
-                h_last = int(rest[idx + 1])
+                try:
+                    h_last = int(rest[idx + 1])
+                except ValueError:
+                    die("--last requires an integer")
+                if h_last < 1:
+                    die("--last must be >= 1")
+            else:
+                die("--last requires an integer")
             rest = [r for i, r in enumerate(rest) if i != idx and i != idx + 1]
         if "--days" in rest:
             idx = rest.index("--days")
@@ -4285,7 +4317,7 @@ def main() -> None:
                     die("--days requires an integer")
                 cost_rest = [r for i, r in enumerate(cost_rest) if i != idx and i != idx + 1]
             else:
-                cost_rest = [r for i, r in enumerate(cost_rest) if i != idx]
+                die("--days requires an integer")
         job_filter = next((r for r in cost_rest if not r.startswith("-")), "")
         cmd_cost(name=job_filter, days=days, all_time=all_time)
     elif cmd == "work":
