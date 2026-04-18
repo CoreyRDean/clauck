@@ -303,17 +303,33 @@ def cmd_next() -> None:
         print(f"  {name:<{name_w}}  {cron_display:<22}  {status}")
 
 
-def cmd_list() -> None:
+def cmd_list(tag_filter: str = "") -> None:
     m = load_manifest()
-    jobs = m.get("jobs", [])
-    if not jobs:
+    all_jobs = m.get("jobs", [])
+    if not all_jobs:
         print("No jobs registered.")
         return
+
+    if tag_filter:
+        tf = tag_filter.lower()
+        jobs = [j for j in all_jobs if tf in [t.lower() for t in j.get("tags", [])]]
+        if not jobs:
+            all_tags: set = set()
+            for j in all_jobs:
+                all_tags.update(j.get("tags", []))
+            print(f"  no jobs with tag: {tag_filter}")
+            if all_tags:
+                print(f"  available tags: {', '.join(sorted(all_tags))}")
+            return
+    else:
+        jobs = all_jobs
+
     for j in jobs:
         name = j["name"]
         cron = j.get("cron") or "(no cron)"
         desc = j.get("description", "")[:60]
         disabled = j.get("disabled", False)
+        tags = j.get("tags", [])
         state = job_state(name)
 
         status = "active"
@@ -331,7 +347,8 @@ def cmd_list() -> None:
         if "last_run" in state:
             extra += f"  last: {state['last_run']}"
 
-        print(f"  {name:<25} {cron:<20} [{status}]")
+        tags_str = f"  [{', '.join(tags)}]" if tags else ""
+        print(f"  {name:<25} {cron:<20} [{status}]{tags_str}")
         if desc:
             print(f"    {desc}")
         if extra:
@@ -3728,7 +3745,12 @@ def main() -> None:
     rest = args[1:]
 
     if cmd == "list":
-        cmd_list()
+        tag_filter = ""
+        if "--tag" in rest:
+            idx = rest.index("--tag")
+            if idx + 1 < len(rest):
+                tag_filter = rest[idx + 1]
+        cmd_list(tag_filter=tag_filter)
     elif cmd == "next":
         cmd_next()
     elif cmd == "history":
