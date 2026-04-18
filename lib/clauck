@@ -1688,11 +1688,11 @@ def cmd_revive(name: str, budget: float | None = None, turns: int | None = None)
         print(f"  dag resume: {dag_root} (invocation {dag_invocation_id[:8]}) — "
               f"completed upstream preserved, pipeline will continue")
     elif dag_invocation_id and dag_resume_expired:
-        print(f"  dag context present but invocation state expired — "
-              f"resuming node only; upstream promises considered dead")
+        print("  dag context present but invocation state expired — "
+              "resuming node only; upstream promises considered dead")
     elif dag_invocation_id and not dag_runner.exists():
-        print(f"  dag context present but dag-runner.py missing — "
-              f"resuming node only; upstream promises not delivered")
+        print("  dag context present but dag-runner.py missing — "
+              "resuming node only; upstream promises not delivered")
     elif consumers:
         print(f"  consumers queued on success: {', '.join(consumers)}")
     print()
