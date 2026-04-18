@@ -40,13 +40,14 @@ from typing import Optional
 
 SCALE_PARAMS: list[tuple[float, str, str, int, float]] = [
     # ceiling   model     effort    turns  base rate (steady-state $/turn)
-    (0.10,     "haiku",   "medium",   4,   0.015),
-    (0.20,     "haiku",   "high",     8,   0.020),
-    (0.35,     "haiku",   "high",    14,   0.025),
-    (0.50,     "sonnet",  "medium",  18,   0.055),
-    (0.65,     "sonnet",  "high",    25,   0.070),
-    (0.80,     "sonnet",  "high",    40,   0.090),
-    (0.90,     "opus",    "high",    60,   0.200),
+    (0.07,     "haiku",   "low",      3,   0.012),  # pre-existing `effort: low` tier, preserved via scale ≤ 0.07
+    (0.15,     "haiku",   "medium",   4,   0.015),
+    (0.25,     "haiku",   "high",     8,   0.020),
+    (0.40,     "haiku",   "high",    14,   0.025),
+    (0.55,     "sonnet",  "medium",  18,   0.055),
+    (0.70,     "sonnet",  "high",    25,   0.070),
+    (0.85,     "sonnet",  "high",    40,   0.090),
+    (0.95,     "opus",    "high",    60,   0.200),
     (1.00,     "opus",    "high",   100,   0.300),
 ]
 
@@ -65,7 +66,13 @@ INPUT_RATE_PER_MTOK: dict[str, float] = {
 # that doesn't override). User can change these in .clauck.config.json.
 DEFAULT_DOCTOR_CONFIG: dict = {
     "min_budget_usd": 0.05,
-    "max_budget_usd": 10.00,
+    # Raised from $10 to $25 so the high-end opus bands (scale ≥ 0.85) are
+    # not silently clamped by default — a scale=0.90 session computes raw
+    # ~$22.68, under the $25 ceiling. Scale 1.00 (100 opus turns) still
+    # clamps at $25 as a genuine circuit breaker — users with legitimate
+    # 100-turn opus workloads should raise this explicitly; the clamp warns
+    # visibly when it fires.
+    "max_budget_usd": 25.00,
     "headroom_multiplier": 1.3,
     "scale_skew": 0.0,
     "auto_skew_increment": 0.05,
@@ -163,23 +170,28 @@ def compute_sizing(
     grows by G×base each turn, the session-total cost is approximately
     N × base × (1 + N × G / 2), not N × base × (1 + N × G).
     """
+    # DEFAULT_DOCTOR_CONFIG is the single source of truth for fallbacks;
+    # using a dict-merge means every key the user hasn't overridden comes
+    # from the defaults module, not from a stale magic number at the call
+    # site. A prior version had literal `.get(k, 5.00)` here that disagreed
+    # with the default-config value — removed to prevent that class of drift.
     cfg = {**DEFAULT_DOCTOR_CONFIG, **(config or {})}
 
-    skew = float(cfg.get("scale_skew", 0.0) or 0.0)
+    skew = float(cfg["scale_skew"] or 0.0)
     effective = _clamp_scale(float(scale) + skew)
     model, effort, turns, rate = scale_to_params(effective)
 
-    growth = 1.0 + turns * float(cfg.get("context_growth_per_turn", 0.015)) / 2.0
+    growth = 1.0 + turns * float(cfg["context_growth_per_turn"]) / 2.0
     base_cost = turns * rate * growth
 
     input_rate = INPUT_RATE_PER_MTOK.get(model, 1.0)
     ctx_cost = turns * max(0, int(context_tokens)) * input_rate / 1_000_000.0
 
-    headroom = float(cfg.get("headroom_multiplier", 1.3))
+    headroom = float(cfg["headroom_multiplier"])
     raw = (base_cost + ctx_cost) * headroom
 
-    lo = float(cfg.get("min_budget_usd", 0.05))
-    hi = float(cfg.get("max_budget_usd", 5.00))
+    lo = float(cfg["min_budget_usd"])
+    hi = float(cfg["max_budget_usd"])
     budget = max(lo, min(raw, hi))
 
     explanation = (

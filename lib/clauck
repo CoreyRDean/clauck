@@ -1505,6 +1505,18 @@ def cmd_size(
     print(f"  effort:    {sized['effort']}")
     print(f"  max_turns: {sized['max_turns']}")
     print(f"  max_budget_usd: ${sized['max_budget_usd']:.2f}")
+
+    # Surface clamps visibly. "Clamped" means the raw derivation exceeded
+    # max_budget_usd (or fell below min_budget_usd) and the output is NOT
+    # what the formula naturally produced. Users who don't see this warning
+    # can be misled about what their scale actually buys.
+    raw_total = (sized["base_cost"] + sized["context_cost"]) * sized["headroom"]
+    if abs(raw_total - sized["max_budget_usd"]) > 0.01:
+        print(f"  \u26a0 budget clamped: raw derivation ${raw_total:.2f} → "
+              f"capped at ${sized['max_budget_usd']:.2f}")
+        print(f"    raise the ceiling with: "
+              f"clauck config doctor max_budget_usd <value>")
+
     print()
     print(f"  breakdown: {sized['explanation']}")
     print()
@@ -2487,12 +2499,13 @@ Your ONLY job: read the user's context and emit a JSON object with two fields �
 
 The scale captures how hard the diagnostic session will be. Reason from the specific context above. Use the example anchors below as calibration, not as a lookup table — interpolate between them.
 
-- **0.05** — trivial state check, one known location. "is the plist loaded", "is the LaunchAgent active", "show me today's log count". 3–4 turns, one Bash call + report.
-- **0.20** — focused single-target lookup. "find where X last logged", "is my delegate-scout job running as expected", "why did Y not post". One subsystem, one small log search, some synthesis.
-- **0.35** — single-subsystem deep dive. "pe-pipeline artifact is empty", "why is one job failing after last week's change". One pipeline/module, several files, hypothesis-testing.
-- **0.55** — multi-subsystem investigation OR cross-referencing across independently-maintained state. "intent-miner is silent AND delegate-scout has no successful runs", "check scheduler output AND every cron AND the manifest for drift". Two+ real entities, synthesis across them.
-- **0.75** — module-DAG walk or multi-file architectural trace. "inspect pe-pipeline's 10-stage DAG and tell me which producer is missing the prompt reconstruction directive". Enumerate all stages, trace the chain, locate the fault.
-- **0.95** — full-system audit or multi-hypothesis architectural analysis. "audit every job, every log, every state file for consistency; produce a risk register". 50+ reads, deep reasoning, cross-cutting synthesis.
+- **0.05** — trivial state check, one bash call. "is the plist loaded", "is the LaunchAgent active". Haiku/low, 3 turns.
+- **0.10** — focused state query with small synthesis. "show me today's log count for job X", "what's the last run time for Y". Haiku/medium, 4 turns.
+- **0.20** — focused single-target lookup. "find where X last logged", "is my delegate-scout job running as expected", "why did Y not post". One subsystem, one small log search, some synthesis. Haiku/high, 8 turns.
+- **0.35** — single-subsystem deep dive. "pe-pipeline artifact is empty", "why is one job failing after last week's change". One pipeline/module, several files, hypothesis-testing. Haiku/high, 14 turns.
+- **0.55** — multi-subsystem investigation OR cross-referencing across independently-maintained state. "intent-miner is silent AND delegate-scout has no successful runs", "check scheduler output AND every cron AND the manifest for drift". Two+ real entities, synthesis across them. Sonnet/medium→high, 18–25 turns.
+- **0.75** — module-DAG walk or multi-file architectural trace. "inspect pe-pipeline's 10-stage DAG and tell me which producer is missing the prompt reconstruction directive". Enumerate all stages, trace the chain, locate the fault. Sonnet/high, 40 turns.
+- **0.95** — full-system audit or multi-hypothesis architectural analysis. "audit every job, every log, every state file for consistency; produce a risk register". Opus/high, 60+ turns.
 
 # Mode adjustments (applied on top of the base scale)
 
@@ -2902,24 +2915,57 @@ def cmd_doctor(
     is_error = envelope.get("is_error", result.returncode != 0)
     session_id = envelope.get("session_id", "")
 
-    # Auto-skew: detect budget truncation and adjust scale_skew in config so
-    # next invocation is sized more generously. On clean completion, decay
-    # skew by half the increment — keeps it self-balancing instead of
-    # monotonically creeping up. Stderr carries the CLI's "Reached maximum
-    # budget" message when the ceiling hits; stdout/envelope may also contain
-    # it depending on output format.
-    combined_output = (result.stdout or "") + (result.stderr or "")
-    budget_hit = "Reached maximum budget" in combined_output or "max budget exceeded" in combined_output.lower()
+    # Auto-skew: detect budget truncation from the envelope's structured
+    # fields (subtype + errors list), NOT by substring-matching the whole
+    # combined output. The latter would false-positive on any diagnostic
+    # whose report text happens to mention budget truncation (extremely
+    # common once users start debugging this feature). The Claude CLI emits
+    # {"subtype": "error_max_budget_usd", "is_error": true,
+    #  "errors": ["Reached maximum budget ($X)"]} on the actual hit.
+    envelope_subtype = envelope.get("subtype", "") if isinstance(envelope, dict) else ""
+    envelope_errors = envelope.get("errors") if isinstance(envelope, dict) else None
+    if isinstance(envelope_errors, list):
+        errors_joined = " ".join(str(e) for e in envelope_errors)
+    else:
+        errors_joined = str(envelope_errors or "")
+    budget_hit = (
+        envelope_subtype == "error_max_budget_usd"
+        or "Reached maximum budget" in errors_joined
+    )
+    # Short-circuit auto-skew when the budget was already clamped by the
+    # config ceiling — bumping skew cannot help if max_budget_usd is the
+    # binding constraint (it would just inflate the un-clamped intermediate).
+    # Compare raw-derived against the clamped value; if they differ, the
+    # clamp already fired and a warning belongs here instead of a silent bump.
+    budget_was_clamped = False
+    if sized and isinstance(sized, dict):
+        raw_total = (sized.get("base_cost", 0.0) + sized.get("context_cost", 0.0)) * sized.get("headroom", 1.3)
+        budget_was_clamped = abs(raw_total - sized.get("max_budget_usd", 0.0)) > 0.05
+
     try:
-        if budget_hit:
+        if budget_hit and budget_was_clamped:
+            print(
+                f"  \u26a0 budget hit AND budget was clamped to max_budget_usd "
+                f"(${doctor_cfg.get('max_budget_usd', 10.0):.2f}). "
+                f"Raise it with: clauck config doctor max_budget_usd <value>",
+                file=sys.stderr,
+            )
+        elif budget_hit:
             new_cfg = sizing.apply_auto_skew_on_budget_hit()
             new_skew = new_cfg.get("scale_skew", 0.0)
-            print(f"  \u26a0 budget hit — scale_skew auto-bumped to +{new_skew:.2f} (next run will size larger)", file=sys.stderr)
+            print(
+                f"  \u26a0 budget hit — scale_skew auto-bumped to +{new_skew:.2f} "
+                f"(next run will size larger)",
+                file=sys.stderr,
+            )
         elif not is_error and float(doctor_cfg.get("scale_skew", 0.0)) > 0.0:
             new_cfg = sizing.apply_auto_skew_decay()
             new_skew = new_cfg.get("scale_skew", 0.0)
             if new_skew < float(doctor_cfg.get("scale_skew", 0.0)):
-                print(f"  \u2713 clean run — scale_skew decayed to +{new_skew:.2f}", file=sys.stderr)
+                print(
+                    f"  \u2713 clean run — scale_skew decayed to +{new_skew:.2f}",
+                    file=sys.stderr,
+                )
     except Exception as exc:  # noqa: BLE001 — config tuning must never mask primary output
         print(f"  (scale_skew adjust failed: {exc})", file=sys.stderr)
 
@@ -3004,7 +3050,18 @@ def _find_claude() -> str | None:
 
 
 def _build_interpreter_prompt() -> str:
-    """Build the stage-1 interpreter system prompt with live manifest data."""
+    """Build the stage-1 interpreter system prompt with live manifest data.
+
+    KNOWN COMPLIANCE GAP vs INTENT.md §4 (Cost transparency, v2): the
+    semantic interpreter still emits exec_model/exec_effort/exec_max_turns/
+    exec_max_budget_usd directly in its routing JSON, rather than a
+    task_complexity_scale that Python derives from. The doctor interpreter
+    was migrated to the scale-only contract in this release; the semantic
+    path is tracked for migration before v3 of the INTENT contract. The
+    job-creation guidance inside this prompt already directs created jobs
+    to use `complexity:` in frontmatter, so the gap is only the
+    interpreter's OWN stage-2 sizing, not the jobs it creates.
+    """
     subcommands = (
         "list, status, fire, pause, resume, edit, logs, marketplace, install, "
         "update, config, doctor, peek, version, add, inspect, work, "

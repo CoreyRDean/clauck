@@ -5,7 +5,7 @@ description: Time-bounded health checker. Runs every 15 minutes inside a configu
 cron: "*/15 * * * *"
 valid_after: "2026-01-01T00:00:00"
 expires_after: "2026-01-01T06:00:00"
-complexity: 0.10   # single URL health check + conditional alert
+complexity: 0.05   # single URL health check + conditional alert (low effort tier)
 cwd: ~
 setting_sources: ""
 inputs:

@@ -2,7 +2,7 @@
 name: downloads-triage
 version: "1.0.0"
 description: When new files land in ~/Downloads, categorize them and log a brief summary. Demonstrates file_added external triggers.
-complexity: 0.15   # single-trigger categorize + append to log
+complexity: 0.10   # single-trigger categorize + append to log (medium effort tier)
 cwd: ~
 setting_sources: ""
 strict_mcp_config: true

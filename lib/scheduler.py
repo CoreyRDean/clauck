@@ -261,7 +261,25 @@ def _part_matches(part: str, value: int, lo: int, hi: int, aliases) -> bool:
 # ---------- discovery ----------
 
 
-def _resolve_sizing(fm: dict, body: str) -> dict:
+def _load_scheduler_sizing_config() -> dict:
+    """Load sizing config for scheduler-time resolution.
+
+    Takes the doctor block (for min_budget_usd / max_budget_usd / headroom /
+    context_growth_per_turn) but **forces scale_skew=0**. Rationale: the
+    skew is auto-bumped when DOCTOR hits its budget — that signal is about
+    doctor task shapes and must not cross-contaminate every scheduled job.
+    A user whose doctor has been auto-bumped to +0.20 shouldn't see every
+    cron-fired job also skewed upward when those jobs never truncated.
+
+    Loaded once per tick (not per job) — called from discover_jobs().
+    """
+    cfg = sizing.load_doctor_config()
+    cfg = dict(cfg)
+    cfg["scale_skew"] = 0.0
+    return cfg
+
+
+def _resolve_sizing(fm: dict, body: str, cfg: dict) -> dict:
     """Resolve model/effort/max_turns/max_budget_usd via sizing.resolve_params.
 
     Called once per job per tick when building the manifest. If the frontmatter
@@ -273,11 +291,14 @@ def _resolve_sizing(fm: dict, body: str) -> dict:
     prompt body. Producer outputs are added at fire time by run-job.sh, and
     are not known here — but the static body estimate is the right lower
     bound for scheduler-time resolution.
+
+    `cfg` is passed in (not loaded per-call) so the whole tick shares one
+    config read — called ~20 times per tick at 20 jobs × 60s ticks that's
+    a ~30k disk-read/day savings.
     """
     try:
         body_tokens = sizing.estimate_tokens(body)
-        doctor_cfg = sizing.load_doctor_config()
-        return sizing.resolve_params(fm, body_tokens, doctor_cfg)
+        return sizing.resolve_params(fm, body_tokens, cfg)
     except Exception as e:  # noqa: BLE001 — scheduler must never crash on sizing
         print(f"[scheduler] sizing resolution failed: {e}", file=sys.stderr)
         return {
@@ -294,6 +315,10 @@ def discover_jobs() -> list[dict]:
     jobs: list[dict] = []
     if not JOBS_DIR.is_dir():
         return jobs
+    # Load the sizing config once per tick and share it across every job's
+    # resolution — avoids ~20 redundant disk reads per tick at ~20 jobs.
+    # scale_skew is forced to 0 for scheduled jobs (see _load_scheduler_sizing_config).
+    sizing_cfg = _load_scheduler_sizing_config()
     for md in sorted(JOBS_DIR.glob("*.md")):
         if md.name.startswith(".") or md.stem in RESERVED_STEMS:
             continue
@@ -304,7 +329,7 @@ def discover_jobs() -> list[dict]:
             continue
         fm, _body = parse_frontmatter(text)
         name = fm.get("name") or md.stem
-        resolved = _resolve_sizing(fm, _body)
+        resolved = _resolve_sizing(fm, _body, sizing_cfg)
         jobs.append(
             {
                 "name": str(name),
@@ -395,7 +420,7 @@ def discover_jobs() -> list[dict]:
             continue
         fm, _body = parse_frontmatter(text)
         name = fm.get("name") or job_dir.name
-        resolved = _resolve_sizing(fm, _body)
+        resolved = _resolve_sizing(fm, _body, sizing_cfg)
         # Build the job dict same as flat format, plus module_root
         jobs.append(
             {
@@ -449,7 +474,7 @@ def discover_jobs() -> list[dict]:
                 continue
             stage_fm, _stage_body = parse_frontmatter(stage_text)
             stage_name = stage_fm.get("name") or stage_md.stem
-            stage_resolved = _resolve_sizing(stage_fm, _stage_body)
+            stage_resolved = _resolve_sizing(stage_fm, _stage_body, sizing_cfg)
             jobs.append(
                 {
                     "name": str(stage_name),

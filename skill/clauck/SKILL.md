@@ -541,14 +541,16 @@ Interpolate between these; they are calibration points, not buckets:
 
 | Scale | Task shape | Derived model / effort / turns |
 |---|---|---|
-| 0.05 | Trivial state check ("is X loaded?") | haiku / medium / 4 |
-| 0.15 | Focused single-source lookup | haiku / high / 8 |
-| 0.25 | Single-subsystem small investigation | haiku / high / 14 |
+| 0.05 | Trivial state check / single bash call | haiku / low / 3 |
+| 0.10 | Focused single-source lookup | haiku / medium / 4 |
+| 0.20 | Single-subsystem small investigation | haiku / high / 8 |
 | 0.35 | Multi-source digest (2–3 sources) | haiku / high / 14 |
-| 0.45 | Multi-file synthesis | sonnet / medium / 18 |
-| 0.55 | Multi-subsystem investigation | sonnet / high / 25 |
-| 0.75 | Module-DAG walk, multi-file refactor | sonnet / high / 40 |
+| 0.50 | Multi-file synthesis | sonnet / medium / 18 |
+| 0.65 | Multi-subsystem investigation | sonnet / high / 25 |
+| 0.80 | Module-DAG walk, multi-file refactor | sonnet / high / 40 |
 | 0.95 | Deep architectural analysis | opus / high / 100 |
+
+Run `clauck size <scale>` to see the exact derivation for any value, including the clamp warning if `max_budget_usd` truncates the raw derivation.
 
 Run `clauck size <scale>` to see exactly what any scale derives, including the context-token tax and budget breakdown.
 
