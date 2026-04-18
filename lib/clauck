@@ -1034,7 +1034,6 @@ def cmd_history(
 ) -> None:
     """Cross-job invocation timeline sorted by most recent first."""
     import re as _re
-    from datetime import datetime as _dt, timezone as _tz
 
     # Glob all log files, sorted newest first by mtime
     logs = sorted(JOBS_DIR.glob("*-[0-9]*.log"), key=lambda p: p.stat().st_mtime, reverse=True)
