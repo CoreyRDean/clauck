@@ -1052,7 +1052,6 @@ def cmd_history(
 ) -> None:
     """Cross-job invocation timeline sorted by most recent first."""
     import re as _re
-    from datetime import datetime as _dt, timezone as _tz
 
     # Glob all log files, sorted newest first by mtime
     logs = sorted(JOBS_DIR.glob("*-[0-9]*.log"), key=lambda p: p.stat().st_mtime, reverse=True)
@@ -1514,8 +1513,8 @@ def cmd_size(
     if abs(raw_total - sized["max_budget_usd"]) > 0.01:
         print(f"  \u26a0 budget clamped: raw derivation ${raw_total:.2f} → "
               f"capped at ${sized['max_budget_usd']:.2f}")
-        print(f"    raise the ceiling with: "
-              f"clauck config doctor max_budget_usd <value>")
+        print("    raise the ceiling with: "
+              "clauck config doctor max_budget_usd <value>")
 
     print()
     print(f"  breakdown: {sized['explanation']}")
