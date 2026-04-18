@@ -311,6 +311,7 @@ install_files() {
     }
 
     install_file "$repo/lib/scheduler.py"             "$HOME/.clauck/scheduler.py"   755
+    install_file "$repo/lib/sizing.py"                "$HOME/.clauck/sizing.py"      644
     install_file "$repo/lib/run-job.sh"               "$HOME/.clauck/run-job.sh"     755
     install_file "$repo/lib/trigger-job.sh"           "$HOME/.clauck/trigger-job.sh" 755
     install_file "$repo/lib/update-check.sh"          "$HOME/.clauck/update-check.sh" 755

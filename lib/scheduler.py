@@ -29,6 +29,19 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 
+# Sizing helpers — shared with the CLI. Same loader pattern as lib/clauck so
+# the module works from either the installed location (~/.clauck/sizing.py)
+# or the dev-tree (lib/sizing.py, when scheduler.py is run uninstalled).
+try:
+    _SIZING_DIR = Path(os.environ.get("HOME", str(Path.home()))) / ".clauck"
+    if not (_SIZING_DIR / "sizing.py").exists():
+        _SIZING_DIR = Path(__file__).resolve().parent
+    sys.path.insert(0, str(_SIZING_DIR))
+    import sizing  # type: ignore[import-not-found]
+finally:
+    if str(_SIZING_DIR) in sys.path:
+        sys.path.remove(str(_SIZING_DIR))
+
 HOME = Path(os.environ.get("HOME", str(Path.home())))
 JOBS_DIR = HOME / ".clauck"
 STATE_DIR = JOBS_DIR / ".state"
@@ -75,11 +88,34 @@ def parse_frontmatter(text: str) -> tuple[dict, str]:
     return _parse_yaml_subset(m.group(1)), m.group(2)
 
 
+def _strip_inline_comment(value: str) -> str:
+    """Strip trailing YAML inline comment (` #...`), respecting quotes.
+
+    YAML's rule: `#` starts a comment only when preceded by whitespace or is
+    at the start of a line, AND only when not inside a quoted string. So:
+      complexity: 0.15   # comment       → 0.15
+      description: "a # b"               → "a # b"   (# is inside quotes)
+      slug: "foo#bar"                    → "foo#bar" (no preceding space)
+    """
+    in_single = False
+    in_double = False
+    for i, ch in enumerate(value):
+        if ch == "'" and not in_double:
+            in_single = not in_single
+        elif ch == '"' and not in_single:
+            in_double = not in_double
+        elif ch == "#" and not in_single and not in_double:
+            if i == 0 or value[i - 1].isspace():
+                return value[:i].rstrip()
+    return value
+
+
 def _parse_yaml_subset(block: str) -> dict:
     """Minimal YAML supporting:
       - flat scalars: `key: value`
       - simple string lists: `- value`
       - list-of-objects in flow style: `- {key: value, key: value}`
+      - inline `#` comments trailing a scalar value
     No nested block-style maps.
     """
     data: dict = {}
@@ -89,7 +125,7 @@ def _parse_yaml_subset(block: str) -> dict:
         if not stripped or stripped.startswith("#"):
             continue
         if stripped.startswith("- ") and current_list_key is not None:
-            item = stripped[2:].strip()
+            item = _strip_inline_comment(stripped[2:].strip())
             if item.startswith("{") and item.endswith("}"):
                 data[current_list_key].append(_parse_flow_object(item))
             else:
@@ -98,7 +134,7 @@ def _parse_yaml_subset(block: str) -> dict:
         if ":" in stripped:
             key, _, val = stripped.partition(":")
             key = key.strip()
-            val = val.strip()
+            val = _strip_inline_comment(val.strip())
             if val == "":
                 data[key] = []
                 current_list_key = key
@@ -225,6 +261,35 @@ def _part_matches(part: str, value: int, lo: int, hi: int, aliases) -> bool:
 # ---------- discovery ----------
 
 
+def _resolve_sizing(fm: dict, body: str) -> dict:
+    """Resolve model/effort/max_turns/max_budget_usd via sizing.resolve_params.
+
+    Called once per job per tick when building the manifest. If the frontmatter
+    has `complexity:`, the four sizing fields derive from that + any explicit
+    overrides. If not, legacy defaults apply.
+
+    Body tokens are estimated from the prompt body (post-frontmatter text) so
+    the context-injection tax in the derived budget reflects at least the
+    prompt body. Producer outputs are added at fire time by run-job.sh, and
+    are not known here — but the static body estimate is the right lower
+    bound for scheduler-time resolution.
+    """
+    try:
+        body_tokens = sizing.estimate_tokens(body)
+        doctor_cfg = sizing.load_doctor_config()
+        return sizing.resolve_params(fm, body_tokens, doctor_cfg)
+    except Exception as e:  # noqa: BLE001 — scheduler must never crash on sizing
+        print(f"[scheduler] sizing resolution failed: {e}", file=sys.stderr)
+        return {
+            "model": str(fm.get("model", "")).strip(),
+            "effort": str(fm.get("effort", "high")),
+            "max_turns": int(fm.get("max_turns", 50) or 50),
+            "max_budget_usd": float(fm.get("max_budget_usd", 2.0) or 2.0),
+            "provenance": {},
+            "sizing": None,
+        }
+
+
 def discover_jobs() -> list[dict]:
     jobs: list[dict] = []
     if not JOBS_DIR.is_dir():
@@ -239,17 +304,18 @@ def discover_jobs() -> list[dict]:
             continue
         fm, _body = parse_frontmatter(text)
         name = fm.get("name") or md.stem
+        resolved = _resolve_sizing(fm, _body)
         jobs.append(
             {
                 "name": str(name),
                 "path": str(md),
                 "description": str(fm.get("description", "")),
                 "cron": str(fm.get("cron", "")).strip(),
-                "max_turns": int(fm.get("max_turns", 50)),
-                "max_budget_usd": float(fm.get("max_budget_usd", 2.0)),
+                "max_turns": int(resolved["max_turns"]),
+                "max_budget_usd": float(resolved["max_budget_usd"]),
                 "cwd": os.path.expanduser(str(fm.get("cwd") or "~")),
-                "effort": str(fm.get("effort", "high")),
-                "model": str(fm.get("model", "")).strip(),
+                "effort": str(resolved["effort"]),
+                "model": str(resolved["model"]).strip(),
                 # setting_sources: "" to skip plugins/settings (massive cache reduction),
                 # or "user,project,local" etc. Unset → claude default.
                 "setting_sources": fm.get("setting_sources", None),
@@ -329,6 +395,7 @@ def discover_jobs() -> list[dict]:
             continue
         fm, _body = parse_frontmatter(text)
         name = fm.get("name") or job_dir.name
+        resolved = _resolve_sizing(fm, _body)
         # Build the job dict same as flat format, plus module_root
         jobs.append(
             {
@@ -336,11 +403,11 @@ def discover_jobs() -> list[dict]:
                 "path": str(job_md),
                 "description": str(fm.get("description", "")),
                 "cron": str(fm.get("cron", "")).strip(),
-                "max_turns": int(fm.get("max_turns", 50)),
-                "max_budget_usd": float(fm.get("max_budget_usd", 2.0)),
+                "max_turns": int(resolved["max_turns"]),
+                "max_budget_usd": float(resolved["max_budget_usd"]),
                 "cwd": os.path.expanduser(str(fm.get("cwd") or "~")),
-                "effort": str(fm.get("effort", "high")),
-                "model": str(fm.get("model", "")).strip(),
+                "effort": str(resolved["effort"]),
+                "model": str(resolved["model"]).strip(),
                 "setting_sources": fm.get("setting_sources", None),
                 "strict_mcp_config": bool(fm.get("strict_mcp_config", False)),
                 "debounce_seconds": int(fm.get("debounce_seconds", 0) or 0),
@@ -382,17 +449,18 @@ def discover_jobs() -> list[dict]:
                 continue
             stage_fm, _stage_body = parse_frontmatter(stage_text)
             stage_name = stage_fm.get("name") or stage_md.stem
+            stage_resolved = _resolve_sizing(stage_fm, _stage_body)
             jobs.append(
                 {
                     "name": str(stage_name),
                     "path": str(stage_md),
                     "description": str(stage_fm.get("description", "")),
                     "cron": str(stage_fm.get("cron", "")).strip(),
-                    "max_turns": int(stage_fm.get("max_turns", 50)),
-                    "max_budget_usd": float(stage_fm.get("max_budget_usd", 2.0)),
+                    "max_turns": int(stage_resolved["max_turns"]),
+                    "max_budget_usd": float(stage_resolved["max_budget_usd"]),
                     "cwd": os.path.expanduser(str(stage_fm.get("cwd") or "~")),
-                    "effort": str(stage_fm.get("effort", "high")),
-                    "model": str(stage_fm.get("model", "")).strip(),
+                    "effort": str(stage_resolved["effort"]),
+                    "model": str(stage_resolved["model"]).strip(),
                     "setting_sources": stage_fm.get("setting_sources", None),
                     "strict_mcp_config": bool(stage_fm.get("strict_mcp_config", False)),
                     "debounce_seconds": int(stage_fm.get("debounce_seconds", 0) or 0),

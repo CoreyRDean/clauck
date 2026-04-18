@@ -25,6 +25,11 @@ Usage:
     clauck uninstall [--wipe]            Uninstall (preserves jobs/logs unless --wipe)
     clauck config [set <key> <value>]    Show or edit config
                                          (e.g. clauck config set notifications true)
+    clauck config doctor [<key> [<val>]] Inspect or set doctor sizing config
+                                         (e.g. clauck config doctor scale_skew 0.1)
+    clauck size <scale> [--ctx N] [--model M]
+                                         Show what the sizing formula derives
+                                         for a given complexity scale (0.0–1.0).
     clauck add <path> [--name N] [--when "schedule"]  Import a file as a job
     clauck validate <name> [<name2> …]   Validate a job's frontmatter and config
     clauck validate --all                Validate all installed jobs
@@ -64,6 +69,19 @@ import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+# Sizing helpers — shared with scheduler.py. Looked up in either the installed
+# location (~/.clauck/sizing.py, where install.sh places it) or the dev-tree
+# location (lib/sizing.py, for running from a checkout).
+try:
+    _SIZING_DIR = Path(os.environ.get("HOME", str(Path.home()))) / ".clauck"
+    if not (_SIZING_DIR / "sizing.py").exists():
+        _SIZING_DIR = Path(__file__).resolve().parent
+    sys.path.insert(0, str(_SIZING_DIR))
+    import sizing  # type: ignore[import-not-found]
+finally:
+    if str(_SIZING_DIR) in sys.path:
+        sys.path.remove(str(_SIZING_DIR))
+
 HOME = Path(os.environ.get("HOME", str(Path.home())))
 JOBS_DIR = HOME / ".clauck"
 STATE_DIR = JOBS_DIR / ".state"
@@ -82,7 +100,7 @@ KNOWN_COMMANDS = {
     "marketplace", "install", "update", "uninstall", "config", "version",
     "doctor", "report", "peek", "work", "mcp",
     "add", "validate", "inspect", "remove", "delete", "rm", "rename", "mv", "next",
-    "cost",
+    "cost", "size",
     "history", "trace",
     "-h", "--help", "help",
 }
@@ -1374,6 +1392,53 @@ def cmd_uninstall(wipe: bool = False) -> None:
 
 
 def cmd_config(args: list[str]) -> None:
+    # `clauck config doctor [key [value]]` — dedicated view/edit for the
+    # doctor sizing block. Shows defaults-merged view (so users see what's
+    # actually in effect, not just what's been overridden) and accepts
+    # targeted edits without needing dotted-key syntax.
+    if args and args[0] == "doctor":
+        rest_doctor = args[1:]
+        if not rest_doctor:
+            cfg = sizing.load_doctor_config()
+            print("  doctor sizing config (defaults merged):")
+            for k, v in cfg.items():
+                print(f"    {k}: {v}")
+            return
+        if len(rest_doctor) == 1:
+            cfg = sizing.load_doctor_config()
+            key = rest_doctor[0]
+            if key not in cfg:
+                die(
+                    f"unknown doctor config key: {key!r}. "
+                    f"Valid keys: {', '.join(sorted(sizing.DEFAULT_DOCTOR_CONFIG))}"
+                )
+            print(f"  {key}: {cfg[key]}")
+            return
+        key, raw_value = rest_doctor[0], rest_doctor[1]
+        if key not in sizing.DEFAULT_DOCTOR_CONFIG:
+            die(
+                f"unknown doctor config key: {key!r}. "
+                f"Valid keys: {', '.join(sorted(sizing.DEFAULT_DOCTOR_CONFIG))}"
+            )
+        default_val = sizing.DEFAULT_DOCTOR_CONFIG[key]
+        try:
+            if isinstance(default_val, bool):
+                value: object = raw_value.lower() in ("1", "true", "yes")
+            elif isinstance(default_val, int):
+                value = int(raw_value)
+            elif isinstance(default_val, float):
+                value = float(raw_value)
+            else:
+                value = raw_value
+        except ValueError:
+            die(
+                f"invalid value {raw_value!r} for {key} "
+                f"(expected {type(default_val).__name__})"
+            )
+        new_cfg = sizing.save_doctor_config({key: value})
+        print(f"  set doctor.{key} = {new_cfg[key]}")
+        return
+
     if not args or args[0] != "set":
         config = load_config()
         print(json.dumps(config, indent=2))
@@ -1404,6 +1469,51 @@ def cmd_config(args: list[str]) -> None:
     d[key_path[-1]] = value
     CONFIG_FILE.write_text(json.dumps(config, indent=2) + "\n")
     print(f"  set {args[1]} = {value}")
+
+
+def cmd_size(
+    scale_raw: str,
+    ctx_tokens: int = 0,
+    model_override: str = "auto",
+) -> None:
+    """Show what the sizing formula derives for a given complexity scale.
+
+    Exists so humans and agents can introspect sizing without firing a session.
+    Useful when authoring a new job (`clauck size 0.35` tells you the derived
+    model/turns/budget before you commit complexity: 0.35 to frontmatter) or
+    debugging a surprising doctor sizing.
+    """
+    try:
+        scale = float(scale_raw)
+    except ValueError:
+        die(f"invalid scale {scale_raw!r} — expected float in [0.0, 1.0]")
+    if scale < 0.0 or scale > 1.0:
+        die(f"scale {scale} out of range — must be in [0.0, 1.0]")
+
+    cfg = sizing.load_doctor_config()
+    sized = sizing.compute_sizing(scale, int(ctx_tokens), cfg)
+
+    if model_override != "auto" and model_override != sized["model"]:
+        print(f"  note: formula picked {sized['model']}; your override = {model_override!r}")
+        print(f"        (override the model in frontmatter with `model: {model_override}`)")
+        print()
+
+    print(f"  scale:     {scale}")
+    print(f"  skew:      {cfg.get('scale_skew', 0.0):+.2f} "
+          f"(effective scale: {sized['scale_effective']:.2f})")
+    print(f"  model:     {sized['model']}")
+    print(f"  effort:    {sized['effort']}")
+    print(f"  max_turns: {sized['max_turns']}")
+    print(f"  max_budget_usd: ${sized['max_budget_usd']:.2f}")
+    print()
+    print(f"  breakdown: {sized['explanation']}")
+    print()
+    print(f"  config (from {CONFIG_FILE}):")
+    for k in ("min_budget_usd", "max_budget_usd", "headroom_multiplier",
+              "scale_skew", "auto_skew_increment", "auto_skew_cap"):
+        print(f"    {k}: {cfg.get(k)}")
+    print()
+    print(f"  to pin in a job: add `complexity: {scale}` to frontmatter.")
 
 
 def cmd_peek() -> None:
@@ -1643,6 +1753,12 @@ _KNOWN_FM_FIELDS: "set[str]" = {
     "valid_after", "expires_after", "session_persist", "interactive",
     "trace_tool_calls", "external_triggers", "semantic_hooks",
     "tags", "producers", "consumers", "inputs", "version",
+    # Sizing: `complexity` is a float 0.0–1.0 that derives model/effort/
+    # max_turns/max_budget_usd at run time via lib/sizing.py. Any explicit
+    # field overrides its derived counterpart (override semantics are per
+    # field, so a job can pin max_turns while leaving everything else
+    # derived). See CLAUDE.md "Cost policy" for details.
+    "complexity",
 }
 
 _EFFORT_VALUES: "set[str]" = {"low", "medium", "high"}
@@ -1665,6 +1781,26 @@ def _suggest_field(unknown: str) -> "str | None":
     return best
 
 
+def _strip_inline_comment(value: str) -> str:
+    """Strip trailing YAML inline comment (` #...`), respecting quotes.
+
+    Mirrors scheduler._strip_inline_comment so both parsers agree. `#` starts
+    a comment only when preceded by whitespace (or at start) AND not inside a
+    quoted string.
+    """
+    in_single = False
+    in_double = False
+    for i, ch in enumerate(value):
+        if ch == "'" and not in_double:
+            in_single = not in_single
+        elif ch == '"' and not in_single:
+            in_double = not in_double
+        elif ch == "#" and not in_single and not in_double:
+            if i == 0 or value[i - 1].isspace():
+                return value[:i].rstrip()
+    return value
+
+
 def _parse_fm_block(fm_text: str) -> dict:
     """Parse scheduler-compatible YAML frontmatter subset into a dict."""
     data: dict = {}
@@ -1674,7 +1810,7 @@ def _parse_fm_block(fm_text: str) -> dict:
         if not s or s.startswith("#"):
             continue
         if s.startswith("- ") and cur_list is not None:
-            item = s[2:].strip()
+            item = _strip_inline_comment(s[2:].strip())
             if isinstance(data.get(cur_list), list):
                 if item.startswith("{") and item.endswith("}"):
                     obj: dict = {}
@@ -1690,7 +1826,7 @@ def _parse_fm_block(fm_text: str) -> dict:
         if ":" in s:
             key, _, val = s.partition(":")
             key = key.strip()
-            val = val.strip()
+            val = _strip_inline_comment(val.strip())
             if val == "":
                 data[key] = []
                 cur_list = key
@@ -1758,7 +1894,26 @@ def _validate_job_file(
         if not fm.get("external_triggers"):
             findings.append(("info", "no cron or external_triggers — fires ad-hoc only"))
 
-    # Budget
+    # Complexity (new primary sizing input)
+    raw_complexity = fm.get("complexity")
+    has_complexity = False
+    if raw_complexity is not None:
+        try:
+            c = float(raw_complexity)
+            if c < 0.0 or c > 1.0:
+                findings.append(("error", f"complexity must be in [0.0, 1.0] (got {c})"))
+            else:
+                has_complexity = True
+                sized = sizing.compute_sizing(c, 0, sizing.load_doctor_config())
+                findings.append((
+                    "ok",
+                    f"complexity: {c} → derives {sized['model']}/{sized['effort']}, "
+                    f"{sized['max_turns']} turns, ${sized['max_budget_usd']:.2f} budget"
+                ))
+        except (ValueError, TypeError):
+            findings.append(("error", f"complexity must be a number (got {raw_complexity!r})"))
+
+    # Budget (still accepted as explicit override, or standalone if no complexity)
     raw_budget = fm.get("max_budget_usd")
     if raw_budget is not None:
         try:
@@ -1768,11 +1923,12 @@ def _validate_job_file(
             elif b > 10:
                 findings.append(("warning", f"max_budget_usd ${b:.2f} is unusually high (> $10)"))
             else:
-                findings.append(("ok", f"budget: ${b:.2f}/run"))
+                label = "budget override" if has_complexity else "budget"
+                findings.append(("ok", f"{label}: ${b:.2f}/run"))
         except (ValueError, TypeError):
             findings.append(("error", f"max_budget_usd must be a number (got {raw_budget!r})"))
 
-    # Turns
+    # Turns (still accepted as explicit override)
     raw_turns = fm.get("max_turns")
     if raw_turns is not None:
         try:
@@ -1783,6 +1939,18 @@ def _validate_job_file(
                 findings.append(("warning", f"max_turns {t} is unusually high (> 200)"))
         except (ValueError, TypeError):
             findings.append(("error", f"max_turns must be an integer (got {raw_turns!r})"))
+
+    # At least one sizing input required. A job with literally nothing sized
+    # falls through to LEGACY_DEFAULTS (max_turns=50, max_budget_usd=$2.00),
+    # which is what pre-complexity jobs always did — so this is a warning, not
+    # an error, to preserve backward compat. New jobs should declare complexity.
+    if raw_complexity is None and raw_turns is None and raw_budget is None:
+        findings.append((
+            "warning",
+            "no sizing declared — falls back to legacy defaults "
+            "(max_turns=50, max_budget_usd=$2.00). Add `complexity: <0.0-1.0>` "
+            "to frontmatter to pick a derived sizing.",
+        ))
 
     # Effort
     effort = str(fm.get("effort", "")).strip()
@@ -1926,6 +2094,35 @@ def cmd_inspect(name: str) -> None:
         print(f"  Module root: {job['module_root']}")
     print(f"  Prompt: {job.get('prompt_path', '')}")
     print(f"  Disabled: {job.get('disabled', False)}")
+
+    # --- Sizing: resolved params with per-field provenance ---
+    # Reads the frontmatter directly so inspect shows the truth of the .md
+    # file, not the manifest cache (which is resolved once at scheduler tick
+    # time and may lag if the file was edited since). Uses an empty context
+    # token count — inspection is a static view; fire-time sizing adds the
+    # actual body + producer outputs tax.
+    prompt_path = job.get("prompt_path", "")
+    fm_for_sizing: dict = {}
+    if prompt_path and Path(prompt_path).exists():
+        try:
+            import re as _re_fm
+            text = Path(prompt_path).read_text(encoding="utf-8")
+            fm_match = _re_fm.match(r"\A---\s*\n(.*?)\n---\s*\n?", text, _re_fm.DOTALL)
+            if fm_match:
+                fm_for_sizing = _parse_fm_block(fm_match.group(1))
+        except OSError:
+            pass
+    resolved = sizing.resolve_params(fm_for_sizing, 0, sizing.load_doctor_config())
+    prov = resolved["provenance"]
+    print("  Sizing:")
+    if fm_for_sizing.get("complexity") is not None:
+        print(f"    complexity: {fm_for_sizing['complexity']}"
+              + (f" (sizing: {resolved['sizing']['explanation']})"
+                 if resolved["sizing"] else ""))
+    print(f"    model:          {resolved['model'] or '(default)'}  [{prov['model']}]")
+    print(f"    effort:         {resolved['effort']}  [{prov['effort']}]")
+    print(f"    max_turns:      {resolved['max_turns']}  [{prov['max_turns']}]")
+    print(f"    max_budget_usd: ${float(resolved['max_budget_usd']):.2f}  [{prov['max_budget_usd']}]")
 
     # Show tags
     tags = job.get("tags", [])
@@ -2266,77 +2463,66 @@ def _log_interpreter_failure(
 
 
 def _build_doctor_interpreter_prompt(mode_label: str, context: str) -> str:
-    """Stage-1 doctor interpreter: pick complexity-scaled execution params.
+    """Stage-1 doctor interpreter: pick a task complexity scale.
 
-    Unlike the general semantic interpreter, doctor's interpreter only emits
-    the execution parameters (model/effort/turns/budget). There's no
-    deterministic branch — doctor always runs a Claude session.
+    Emits only the scale and a distilled interpretation. Python code
+    (lib/sizing.py) derives model, effort, turns, and budget from the scale.
+    Doing dollar arithmetic in the prompt produced literal-anchoring
+    failures — classifiers grab the nearest dollar value in the prompt
+    rather than computing. Moving the math out of the prompt eliminates
+    that class of failure structurally.
     """
     ctx_line = context.strip() or "(no user context — general health check)"
-    return f"""You are the clauck doctor parameter classifier.
+    return f"""You are the clauck doctor complexity classifier.
 
-Your job: read the user's context and decide how much firepower the diagnostic session needs.
+Your ONLY job: read the user's context and emit a JSON object with two fields — `interpretation` and `task_complexity_scale`. Do NOT emit model, turns, budget, or any dollar values. Python computes those from the scale.
 
 # Mode
 {mode_label}
 
-# User context
+# User context (this is what you size)
 {ctx_line}
 
-# How to size the session
+# Pick a scale in [0.00, 1.00]
 
-Reason from the specific context, not from tiers. No two invocations have identical shapes.
+The scale captures how hard the diagnostic session will be. Reason from the specific context above. Use the example anchors below as calibration, not as a lookup table — interpolate between them.
 
-**Think about what the session will actually do.** Doctor is a diagnostic session that reads files, inspects state, and optionally applies fixes. Each Read call is ~1–3k tokens on a small file, more on a large log. Each Bash call with a long stdout return costs more. Multi-step investigations multiply tool calls.
+- **0.05** — trivial state check, one known location. "is the plist loaded", "is the LaunchAgent active", "show me today's log count". 3–4 turns, one Bash call + report.
+- **0.20** — focused single-target lookup. "find where X last logged", "is my delegate-scout job running as expected", "why did Y not post". One subsystem, one small log search, some synthesis.
+- **0.35** — single-subsystem deep dive. "pe-pipeline artifact is empty", "why is one job failing after last week's change". One pipeline/module, several files, hypothesis-testing.
+- **0.55** — multi-subsystem investigation OR cross-referencing across independently-maintained state. "intent-miner is silent AND delegate-scout has no successful runs", "check scheduler output AND every cron AND the manifest for drift". Two+ real entities, synthesis across them.
+- **0.75** — module-DAG walk or multi-file architectural trace. "inspect pe-pipeline's 10-stage DAG and tell me which producer is missing the prompt reconstruction directive". Enumerate all stages, trace the chain, locate the fault.
+- **0.95** — full-system audit or multi-hypothesis architectural analysis. "audit every job, every log, every state file for consistency; produce a risk register". 50+ reads, deep reasoning, cross-cutting synthesis.
 
-**Cost anchors** (approximate, for your sizing intuition):
-- haiku: $1/M input, $5/M output, fast. Good for grep-and-report, known-good checks, small-surface lookups.
-- sonnet: $3/M input, $15/M output. Good for investigation that requires synthesis across several files or layered reasoning about state.
-- A single Read of a 100-line log is ~$0.005 on haiku, ~$0.015 on sonnet.
-- Tool-call overhead + system prompt + reasoning padding roughly doubles raw read cost.
-- **Per-turn cost grows with turn count — it does not stay flat.** Every tool result remains in context and is re-paid as input tokens on every subsequent turn. Early turns land near the point estimate; later turns pay for accumulated context. Size budgets against these bands, not a flat rate:
-  - haiku: ~$0.02/turn for sessions ≤6 turns; **~$0.035/turn for 7–15 turns; ~$0.05/turn for 15+ turns**.
-  - sonnet: ~$0.08/turn for sessions ≤6 turns; **~$0.12/turn for 7–15 turns; ~$0.18/turn for 15+ turns**.
-- Common trap: a haiku session sized arithmetically at 12 × $0.02 = $0.24 routinely exceeds its budget around turn 8 because growing context outruns the flat rate. The bands above are the correction — apply them whenever you pick a turn count, and pick your budget from `turns × band_rate`, not `turns × point_estimate`.
+# Mode adjustments (applied on top of the base scale)
 
-**Mode implications:**
-- `--dry`: read-heavy, no writes. Usually shorter.
-- `--fix`: edits + **mandatory per-fix verification reads** + structured output. **Never pick haiku + low effort for --fix.** Haiku at low effort, handed a task that looks like "follow these steps," is prone to pattern-completing a markdown report instead of issuing Bash/Edit calls — a silent regression from tool use to text synthesis. **The exec prompt mandates a verification read-back after every applied fix**, so each fix costs 2 turns minimum (apply + verify), not 1. Formula: `turns = 2–4 initial reads + 2 × expected_fix_count + 2 final (overall verify + report)`. Worked example: a 3-fix session needs ~2 + 6 + 2 = 10 turns at the *theoretical floor*, and real sessions drift up by 30–50% from retries, grep calls, state checks, and log-reading that the agent decides it needs. Add 30% headroom. Absolute floor for --fix: sonnet OR haiku-medium, ≥ 15 turns, ≥ $0.50. Anything under 15 turns in --fix mode is undersized for any non-trivial apply-and-verify cycle.
-- `--safe`: if system-file fixes are needed, doctor escalates instead of editing — doesn't cost extra turns.
-- `--unsafe`: same as --fix for sizing; the permission scope doesn't change the work required.
+- `--dry`: read-heavy, no writes. Leave the base scale unchanged.
+- `--fix`: adds apply + verify turns per distinct fix named in context. Bump the base scale by +0.10 to +0.20 depending on how many fixes the context names (count each `rm`, each diff block, each file to edit as one fix). If context does not name specific fixes, bump by +0.10 as a floor because `--fix` implies mutation work.
+- `--safe` / `--unsafe`: the permission scope does not change the complexity.
 
-**User context signal:**
-- Specific, narrow question ("is the plist loaded?", "is the LaunchAgent active?") → few turns, minimal budget. This applies **only** to genuine yes/no state checks where the answer lives in one known location (one process, one file, one plist). Haiku resolves these in 2–3 reads. Do not apply this tier to any task that requires searching across multiple candidates.
-- **Search-across-logs / locate-output task** ("where did X go", "I don't know where it sent the output", "find the output of Y", "locate what Z wrote", "trace N through the pipeline") → this is a **multi-file search**, not a status lookup. The session must: Glob/Bash to enumerate candidate log files, grep to narrow, then Read 2–4 candidates. That's 6–10 tool calls before any synthesis. **Minimum: haiku OK, ≥ 10 turns, ≥ $0.25.** Do not apply the narrow-question tier here — the file-enumeration + grep + read cycle alone fills 6–8 turns even in the clean case. Known failures: two consecutive invocations of "I just triggered a pe-pipeline run but I don't know where it sent the output" both hit the budget breaker at $0.08–$0.10 (4–5 turns), which is the status-lookup sizing — insufficient for this task shape.
-- Unclear symptom ("something is weird") → full sweep with fixes, plan for broader coverage.
-- Named subsystem failure ("pe-pipeline ran but no artifact") → focused but deep. Read the specific logs, trace the exact chain. Usually sonnet-worthy.
-- Multiple subsystems implicated or architectural suspicion → sonnet, high effort, enough turns to walk the graph.
-- **Module DAG inspection** ("inspect pe-pipeline …", "trace <module> producers", anything that walks a module's internal stages) → size by stage count. A module with N internal stages costs at minimum N+1 reads (JOB.md + each stage) before any analysis begins. pe-pipeline has 10 stages; a "find the final producer and check for a missing directive" task on it needs ≥ 20 turns — the reads-only floor is ~11, plus Bash/grep for cross-stage tracing, plus reasoning turns. Budget accordingly (sonnet, ≥ 25 turns, ≥ $1.00). Known failure: a 12-turn sizing on "inspect pe-pipeline final producer for missing prompt reconstruction directive" truncated at max_turns before the agent could synthesize.
-- **Large user-provided context** (multi-hundred-line pastes, anything that looks like `$(cat file.md)` was shell-expanded into the context — estimate from the size of the context above) → the context inlines verbatim into the execution system prompt and is paid as input tokens on **every turn**, not once. 5KB is negligible. 20KB of context over 15 turns is ~$0.10 on haiku, ~$0.30 on sonnet *before any tool work*. 50KB over 20 turns is $0.25–$0.80 on top of the diagnostic itself. Scale budget by context size: rough line count of the context above, × chosen model's per-turn rate, × expected turn count = context-only floor. Add that to the tool-work estimate. Contexts over ~200 lines → 1.5× the base budget you'd otherwise pick, with a $0.60 floor in --fix modes regardless of model. Known failure: `clauck doctor --fix "$(cat /tmp/test.md)"` hit a $0.20 budget ceiling on the first turn because the sizing treated context as zero-cost.
-- **Remediation directive in context** (context contains structured markdown like "## Findings", "## Recommended fix", "## Escalation", or explicit shell commands the user wants applied — often the output of a prior `--dry` doctor pasted back into `--fix`) → this is an **execute-not-synthesize** job. The agent's task is to apply the listed fixes via tool calls (Bash/Edit), not to restate the analysis. Two distinct failure modes to size against:
-  - *Silent text-completion regression*: low-effort haiku, shown structured markdown that *looks* like a finished task, produces a compressed restatement of the findings instead of taking any action, and exits 0. Defeated by: sonnet + medium effort minimum.
-  - *Turn starvation*: the agent DOES apply fixes but the mandated apply+verify cycle inflates turns faster than the interpreter sized. Defeated by: scaling turns with the number of fixes named in the context.
-  **Count the distinct fixes in the context above** (each `rm` command, each diff block, each file to edit = one fix). Then: `turns ≥ 2 × fix_count + 5 initial/state-check + 3 slack`. A 2-fix directive: ≥ 12 turns. A 3-fix directive (e.g., edit one file + rm three state files = 4 operations): ≥ 15 turns. A 4-fix directive: ≥ 18 turns. Mandatory: sonnet, medium effort (at minimum), turns from formula, ≥ $0.75. In the `interpretation` field, prefer imperative verbs tied to the specific mutations ("Apply pe-qa directive + rm pe-resolve state files") rather than generic "address findings." Known failures: (a) `clauck doctor --fix "$(cat findings.md)"` on haiku/low returned a restructured summary of the input without executing any Bash or Edit — a silent no-op presented as a completed fix. (b) `clauck doctor --fix "$(cat /tmp/test.md)"` sized at 12 turns on a 2-operation directive (pe-qa Edit + pe-resolve state rm) truncated at max_turns despite correct model/effort — the interpreter underestimated the apply+verify turn tax.
+# Multi-entity rule (hard)
 
-**Anchor precedence — when multiple signals match, higher capability wins.** Real invocations often trigger two or more anchors simultaneously (e.g., "search across logs" AND "multiple subsystems implicated" AND a timing hypothesis to test). When a context matches more than one anchor with different sizing implications, pick the routing with the **higher capability on every dimension**: more capable model, higher effort, more turns, larger budget. Never downshift any dimension because a lighter anchor also matched. Concrete collision to remember: search-across-logs (haiku OK) + multiple subsystems (sonnet) → **sonnet wins**. The multi-subsystem reality does not get cheaper just because the investigation starts with log reads. Known failure: `clauck doctor "intent-miner hasn't posted in 4h … also delegate-scout success history and 5-min-cron timing"` — interpreter routed haiku + $0.25 on the log-search anchor, ignored the two-subsystem signal, budget-exceeded before synthesis.
+If the context names **two or more distinct jobs, subsystems, modules, or pipelines** as substantive investigation targets, the MINIMUM scale is 0.50. Multi-entity investigations require cross-reference synthesis that undersizes at lower scales. Treat these terms as **scaffolding**, NOT a second entity when paired with one real target: `scheduler`, `launchd`, `plist`, `hooks`, `the CLI`, `the runtime`, `update-check`, `launch agent`. Two targets both outside the scaffolding list trip this rule; one real target plus scaffolding does not.
 
-**Bias:**
-- If you're unsure whether it's small or medium, err medium. Doctor is usually invoked when something is already weird; underprovisioning wastes both runs.
-- If the question is emphatically trivial (user is just sanity-checking), stay small.
-- The budget should finish the work with some headroom, not exactly match it. Hitting the budget ceiling produces a truncated diagnostic — worse than one that ran a few cents over.
+# Large context rule
 
-**Hard floors and ceilings** (not targets — guardrails):
-- Minimum: 3 turns, $0.05, haiku. Anything smaller isn't worth spawning a session.
-- Maximum: 60 turns, $3.00, sonnet. Anything bigger is probably the wrong framing — suggest breaking it into multiple invocations in the interpretation field.
-- **Multi-entity haiku exclusion:** if the context names **two or more distinct jobs, subsystems, modules, or pipelines** (e.g., "intent-miner" AND "delegate-scout"; "pe-pipeline" AND "heartbeat"), do **NOT** pick haiku regardless of what the per-anchor rules suggest. Multi-entity investigations require cross-referencing state across independently-maintained contexts — the exact task shape where haiku's shallower synthesis produces either truncated reports or turn-wasting re-reads. Route these to sonnet. **Scaffolding allowlist — these terms do NOT count as a second entity even when paired with a real target:** `scheduler`, `launchd`, `plist`, `the hook` / `hooks`, `the CLI` / `clauck CLI`, `the runtime`, `update-check`, `launch agent`. Rationale: these are the runtime substrate that nearly every substantive question incidentally mentions (e.g., "pe-pipeline is empty — is the scheduler firing it?") — counting them would false-positive every single-target question. Two entities **both outside the allowlist** always trips the exclusion; one real entity plus one allowlisted term does not. **Relationship to the precedence rule above:** when this exclusion fires, model choice is decided here — the precedence rule is the softer tiebreaker for anchor collisions this exclusion does not cover.
+If the user context above is visibly long (multi-hundred lines, looks like a shell-expanded file paste), bump the base scale by +0.10. The context inlines into every turn's input and you want the budget to absorb that — Python will also pay the context-injection tax based on token count, but the extra turns/model capacity is your responsibility to size in.
+
+# Remediation-directive rule
+
+If the context is structured markdown with `## Findings`, `## Recommended fix`, `## Escalation`, or explicit shell commands to apply — that is, it's the output of a prior `--dry` doctor handed back to `--fix` — the minimum scale is 0.45. Low-scale sessions on structured input risk "silent text-completion" (rewriting the findings instead of applying them).
+
+# Bias
+
+When unsure between two adjacent scales, pick the higher one. Doctor is invoked when something is already weird; undersizing wastes both runs. The budget is capped elsewhere — your scale just expresses intent magnitude.
 
 # Output
 
 Return ONLY valid JSON, no prose, no markdown fences:
 
-{{"interpretation": "<distilled one-line diagnostic directive>", "exec_model": "haiku"|"sonnet", "exec_effort": "low"|"medium"|"high", "exec_max_turns": <int>, "exec_max_budget_usd": <float>}}
+{{"interpretation": "<distilled one-line diagnostic directive>", "task_complexity_scale": <float 0.0-1.0>}}
 
-The `interpretation` field describes what doctor will investigate — imperative mood, 6-14 words, names the concrete suspicion if context gave one. Example good: "Trace pe-pipeline DAG for missing producer resolution". Example bad: "Run doctor to check things".
+The `interpretation` field describes what doctor will investigate — imperative mood, 6–14 words, names the concrete suspicion when context gave one. Example good: "Trace pe-pipeline DAG for missing producer resolution". Example bad: "Run doctor to check things".
 """
 
 
@@ -2564,6 +2750,7 @@ def cmd_doctor(
             [claude_bin, "-p", user_prompt,
              "--append-system-prompt", interpreter_prompt,
              "--model", "sonnet",
+             "--effort", "low",
              "--max-turns", "2",
              "--max-budget-usd", "0.25",
              "--output-format", "json",
@@ -2579,29 +2766,46 @@ def cmd_doctor(
 
     routing, interpreter_error = _parse_interpreter_result(result_s1, _re)
 
-    if not routing:
+    # Classifier emits {interpretation, task_complexity_scale}. Python
+    # derives model/effort/turns/budget from the scale via sizing.compute_sizing
+    # so literal dollar values in the prompt can't anchor the classifier.
+    doctor_cfg = sizing.load_doctor_config()
+    ctx_tokens = sizing.estimate_tokens(context or "")
+
+    scale: float = 0.5  # fallback midpoint if classifier fails
+    if routing:
+        raw_scale = routing.get("task_complexity_scale")
+        if raw_scale is None:
+            # Accept legacy fallback routes (fallback below emits old shape).
+            raw_scale = routing.get("scale")
+        try:
+            scale = float(raw_scale) if raw_scale is not None else 0.5
+        except (TypeError, ValueError):
+            scale = 0.5
+    else:
         if interpreter_error:
             _log_interpreter_failure(interpreter_error, result_s1, "doctor")
             sys.stderr.write(f"\r  ! interpreter fallback: {interpreter_error[:120]}\n")
             sys.stderr.flush()
         routing = {
             "interpretation": "Run standard diagnostic sweep",
-            "exec_model": "sonnet",
-            "exec_effort": "medium",
-            "exec_max_turns": 20,
-            "exec_max_budget_usd": 0.60,
+            "task_complexity_scale": 0.5,
         }
 
     interpretation = routing.get("interpretation", "Run diagnostic sweep")
-    exec_model = routing.get("exec_model", "sonnet")
-    exec_effort = routing.get("exec_effort", "medium")
-    exec_max_turns = str(routing.get("exec_max_turns", 20))
-    exec_max_budget = str(routing.get("exec_max_budget_usd", 0.60))
+    sized = sizing.compute_sizing(scale, ctx_tokens, doctor_cfg)
+    exec_model = sized["model"]
+    exec_effort = sized["effort"]
+    exec_max_turns = str(sized["max_turns"])
+    exec_max_budget = str(sized["max_budget_usd"])
 
-    # Print interpretation + separator, then resume spinner with new label.
+    # Print interpretation + sizing transparency + separator, then resume
+    # spinner with new label. Every doctor run shows its sizing math so cost
+    # is a first-class transparent policy (INTENT.md §3 #4).
     spinner_running[0] = False
     spin_thread.join(timeout=0.5)
     print(f"  \u2192 {interpretation} [{mode_label}]")
+    print(f"  \u2192 {sized['explanation']}")
     print(f"  {'─' * 60}")
 
     # ── Stage 2: diagnostic execution ────────────────────────────────────
@@ -2697,6 +2901,27 @@ def cmd_doctor(
     claude_result = envelope.get("result", "").strip()
     is_error = envelope.get("is_error", result.returncode != 0)
     session_id = envelope.get("session_id", "")
+
+    # Auto-skew: detect budget truncation and adjust scale_skew in config so
+    # next invocation is sized more generously. On clean completion, decay
+    # skew by half the increment — keeps it self-balancing instead of
+    # monotonically creeping up. Stderr carries the CLI's "Reached maximum
+    # budget" message when the ceiling hits; stdout/envelope may also contain
+    # it depending on output format.
+    combined_output = (result.stdout or "") + (result.stderr or "")
+    budget_hit = "Reached maximum budget" in combined_output or "max budget exceeded" in combined_output.lower()
+    try:
+        if budget_hit:
+            new_cfg = sizing.apply_auto_skew_on_budget_hit()
+            new_skew = new_cfg.get("scale_skew", 0.0)
+            print(f"  \u26a0 budget hit — scale_skew auto-bumped to +{new_skew:.2f} (next run will size larger)", file=sys.stderr)
+        elif not is_error and float(doctor_cfg.get("scale_skew", 0.0)) > 0.0:
+            new_cfg = sizing.apply_auto_skew_decay()
+            new_skew = new_cfg.get("scale_skew", 0.0)
+            if new_skew < float(doctor_cfg.get("scale_skew", 0.0)):
+                print(f"  \u2713 clean run — scale_skew decayed to +{new_skew:.2f}", file=sys.stderr)
+    except Exception as exc:  # noqa: BLE001 — config tuning must never mask primary output
+        print(f"  (scale_skew adjust failed: {exc})", file=sys.stderr)
 
     # In DRY mode the exec prompt requires the final message to be a JSON
     # object of shape {"report": "<markdown>", "fix_instruction": "<str>|null}.
@@ -2865,6 +3090,30 @@ Reason from the specific request, not from tiers. Every invocation has a differe
 - Maximum: 60 turns, $3.00, sonnet (or opus if genuinely warranted).
 - Above the ceiling, reconsider the request — suggest breaking into multiple invocations in the interpretation field.
 
+# When the execution will CREATE or EDIT a job file — use `complexity:` in the frontmatter
+
+The shared sizing formula (lib/sizing.py) lets jobs declare their sizing via a single `complexity:` field (float 0.0–1.0). The scheduler derives model/effort/max_turns/max_budget_usd from it at fire time. This is the **preferred** way to size any new job:
+
+```yaml
+complexity: 0.35   # single-source digest, moderate synthesis
+cron: "0 13 * * 1-5"
+setting_sources: ""
+```
+
+**Complexity scale for jobs** (interpolate between):
+- **0.10** — heartbeat-style state check, one bash call + report.
+- **0.25** — focused single-source digest, one-subsystem log scan, small Slack/Gmail query.
+- **0.40** — multi-source digest or routine synthesis across 2–3 sources (Slack + Calendar + Jira).
+- **0.55** — investigation across multiple state stores, "why did X happen" questions, multi-file read-and-correlate.
+- **0.75** — multi-stage module, producer/consumer DAG, cross-subsystem audit with synthesis.
+- **0.95** — deep architectural workflow, major multi-hour scheduled process.
+
+**Per-field overrides:** explicit `max_turns`, `max_budget_usd`, `effort`, or `model` in frontmatter act as overrides for that field only — they win over the derived value, but leave the others derived. Use only when a specific value is genuinely required (e.g., a job that needs `model: haiku` for cost control on a high-frequency cron).
+
+**Do NOT** emit a job with both `complexity:` AND redundant explicit `max_turns`/`max_budget_usd`/`effort`/`model` that match what the formula would derive — it clutters the frontmatter and divorces the declared intent from the derivation. Emit complexity alone, with overrides only where needed.
+
+Legacy jobs with explicit `max_turns`/`max_budget_usd`/`effort`/`model` and no `complexity:` continue to work unchanged — the resolver falls back to the explicit values. Prefer migrating them to `complexity:` when editing, but do not force-migrate on unrelated edits.
+
 # CRITICAL: Quality of `interpretation` field
 
 The `interpretation` field is the value you add. It is shown to the user as feedback proving you understood their intent. It MUST:
@@ -2936,10 +3185,11 @@ SEMANTIC_EXEC_SYSTEM_PROMPT = """You are the clauck CLI executing a user's natur
 
 5. **To create a scheduled job:**
    - Write the `.md` file(s) using the Write tool
-   - Set appropriate frontmatter: name, cron, model (prefer haiku/sonnet over opus for cost), max_budget_usd, effort
-   - For modules: write JOB.md + internal stage files, wire them with producers
+   - Set appropriate frontmatter. **Prefer `complexity: <0.0-1.0>`** over raw `max_turns`/`max_budget_usd`/`effort`/`model` — the shared sizing formula derives the four params at fire time and keeps cost consistent across the system. Scale anchors: 0.10 = trivial state check, 0.25 = focused digest, 0.40 = routine multi-source synthesis, 0.55 = investigation with correlation, 0.75 = multi-stage DAG, 0.95 = deep architectural workflow. Interpolate between them.
+   - Only add explicit `max_turns`, `max_budget_usd`, `effort`, or `model` fields as **per-field overrides** when a specific value is genuinely required (e.g., pinning `model: haiku` for cost control on a high-frequency cron). Do not duplicate what the formula would derive.
+   - For modules: write JOB.md + internal stage files, wire them with producers. Each stage gets its own `complexity:` sized to that stage's work.
    - The scheduler picks up changes within 60 seconds. NO registration call needed.
-   - Verify by reading `{MANIFEST}` after ~60s OR by running `clauck inspect <name>` if needed
+   - Verify by reading `{MANIFEST}` after ~60s OR by running `clauck inspect <name>` (shows resolved sizing with per-field provenance).
 
 6. **NO EXCEPTIONS.** Even if a native scheduling tool looks more convenient or better-integrated, it is WRONG. The user installed clauck specifically to avoid native scheduling. Respecting that choice is not optional.
 
@@ -3838,6 +4088,26 @@ def main() -> None:
         cmd_version()
     elif cmd == "peek":
         cmd_peek()
+    elif cmd == "size":
+        if not rest:
+            die("usage: clauck size <scale> [--ctx N] [--model auto|haiku|sonnet|opus]")
+        size_scale = rest[0]
+        size_ctx = 0
+        size_model = "auto"
+        i = 1
+        while i < len(rest):
+            if rest[i] == "--ctx" and i + 1 < len(rest):
+                try:
+                    size_ctx = int(rest[i + 1])
+                except ValueError:
+                    die(f"--ctx expects an integer, got {rest[i + 1]!r}")
+                i += 2
+            elif rest[i] == "--model" and i + 1 < len(rest):
+                size_model = rest[i + 1]
+                i += 2
+            else:
+                i += 1
+        cmd_size(size_scale, ctx_tokens=size_ctx, model_override=size_model)
     elif cmd == "add" and rest:
         add_path = ""
         add_name = ""
