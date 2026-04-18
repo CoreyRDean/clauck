@@ -212,6 +212,14 @@ See [SECURITY.md](SECURITY.md) for the full threat model.
 
 ## Cost
 
+Cost is a first-class transparent policy. Every Claude session — scheduled jobs, doctor invocations, natural-language commands — derives its sizing from a single formula keyed on a declared complexity scale (0.0–1.0). The formula lives in one inspectable file (`lib/sizing.py`), the knobs live in one config file (`~/.clauck/.clauck.config.json`, under `doctor`), and the math is printable with `clauck size <scale>`.
+
+**Declaring a job's cost** — prefer `complexity: 0.25` in frontmatter over raw `max_turns`/`max_budget_usd`. The scheduler derives the four parameters at fire time. Explicit fields still work as per-field overrides when you need to pin something. `clauck inspect <job>` shows the resolved values with provenance.
+
+**Auto-tuning** — `clauck doctor` tracks a `scale_skew` offset. On budget truncation it bumps the skew; on clean runs it decays. Self-balancing safety net.
+
+**Typical per-run costs at derived sizing:**
+
 | Config | Per run (Haiku) | Monthly at hourly |
 |---|---|---|
 | Minimal (no MCPs, no plugins) | ~$0.04 | ~$29 |

@@ -518,6 +518,72 @@ One master LaunchAgent, N jobs. Adding a job is dropping a Markdown file.
 | `~/.clauck/.scheduler-stderr.log` | Master scheduler stderr (bad crons, etc). |
 | `~/Library/LaunchAgents/com.<username>.claude-scheduler.plist` | The LaunchAgent. |
 
+## Cost & sizing
+
+Cost is a first-class transparent policy. Every Claude session clauck runs — scheduled jobs, doctor invocations, natural-language-created jobs — derives its sizing parameters from a single formula in `lib/sizing.py`, keyed on a declared **complexity scale** (0.0–1.0). The goal: sizing math happens once, in inspectable code, not duplicated across interpreters and prompts.
+
+### Declaring complexity in a job
+
+Preferred way to size a new job: add `complexity: <float>` to frontmatter. The scheduler derives `(model, effort, max_turns, max_budget_usd)` at fire time. No need to set them yourself.
+
+```yaml
+---
+name: my-digest
+cron: "0 13 * * 1-5"
+complexity: 0.35   # multi-source synthesis (e.g., Slack + Calendar + Jira)
+setting_sources: ""
+---
+```
+
+### Scale anchors
+
+Interpolate between these; they are calibration points, not buckets:
+
+| Scale | Task shape | Derived model / effort / turns |
+|---|---|---|
+| 0.05 | Trivial state check ("is X loaded?") | haiku / medium / 4 |
+| 0.15 | Focused single-source lookup | haiku / high / 8 |
+| 0.25 | Single-subsystem small investigation | haiku / high / 14 |
+| 0.35 | Multi-source digest (2–3 sources) | haiku / high / 14 |
+| 0.45 | Multi-file synthesis | sonnet / medium / 18 |
+| 0.55 | Multi-subsystem investigation | sonnet / high / 25 |
+| 0.75 | Module-DAG walk, multi-file refactor | sonnet / high / 40 |
+| 0.95 | Deep architectural analysis | opus / high / 100 |
+
+Run `clauck size <scale>` to see exactly what any scale derives, including the context-token tax and budget breakdown.
+
+### Per-field overrides
+
+Explicit `max_turns`, `max_budget_usd`, `effort`, or `model` fields always win over their derived counterparts. Use only when pinning a specific value is genuinely needed:
+
+```yaml
+complexity: 0.55
+max_turns: 30    # override: this job consistently benefits from more turns
+# (model, effort, max_budget_usd still derived)
+```
+
+### Config knobs (`clauck config doctor`)
+
+| Key | Default | Purpose |
+|---|---|---|
+| `min_budget_usd` | 0.05 | Floor: budget never clamps below this |
+| `max_budget_usd` | 10.00 | Ceiling: circuit breaker against runaway |
+| `headroom_multiplier` | 1.3 | Multiplied onto `base_cost + context_cost` |
+| `scale_skew` | 0.0 | Offset added to every derived scale |
+| `auto_skew_increment` | 0.05 | How much to bump skew on truncation |
+| `auto_skew_cap` | 0.30 | Max auto-bump before human intervention |
+| `context_growth_per_turn` | 0.015 | Per-turn context-growth rate |
+
+Edit: `clauck config doctor scale_skew 0.1` (set) / `clauck config doctor` (view all).
+
+### Auto-skew (self-tuning)
+
+When a doctor run hits `Reached maximum budget`, `scale_skew` bumps by `auto_skew_increment`, capped at `auto_skew_cap`. On clean (non-truncated) doctor runs, skew decays by half the increment, floored at 0. Self-balancing: raises when truncation happens, relaxes when things stabilize. Manual reset: `clauck config doctor scale_skew 0`.
+
+### Legacy / backward compat
+
+Jobs without `complexity:` continue to work using explicit `max_turns`/`max_budget_usd`/`effort`/`model` fields. Missing-everything jobs fall back to legacy defaults (50 turns, $2.00, high effort, default model) — same behavior as before the sizing system existed. No migration is forced.
+
 ## Frontmatter schema (the job contract)
 
 ```yaml
@@ -525,13 +591,18 @@ One master LaunchAgent, N jobs. Adding a job is dropping a Markdown file.
 name: <string>                      # optional; defaults to filename stem
 description: <string>               # one-line purpose; shown in the manifest
 cron: "<m> <h> <dom> <mon> <dow>"   # 5-field cron; omit/blank = ad-hoc-only
-max_turns: <int>                    # default 50
-max_budget_usd: <float>             # default 2.00
+complexity: <float>                 # 0.0–1.0 scale; derives the four sizing
+                                    # fields below via lib/sizing.py. Preferred
+                                    # over setting them directly. See
+                                    # "Cost & sizing" above.
+max_turns: <int>                    # default 50; override when set
+max_budget_usd: <float>             # default 2.00; override when set
 cwd: <path>                         # default ~; supports ~ and $HOME-relative
-effort: <low|medium|high>           # default high
+effort: <low|medium|high>           # default high; override when set
 model: <alias-or-full-name>         # optional; e.g. "haiku", "sonnet", "opus",
                                     #   or full "claude-haiku-4-5-20251001".
-                                    # Absent = claude's default.
+                                    # override when set; absent = derived or
+                                    # claude's default.
 setting_sources: <csv-or-"">        # optional; maps to --setting-sources.
                                     # Empty string = skip plugins/settings (big
                                     # cache-creation savings for simple jobs).
