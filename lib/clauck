@@ -37,6 +37,10 @@ Usage:
                                          No args: interactive intent-mining session.
                                          --inbox: review pending drafts from prior sessions.
     clauck cost [<name>] [--days N] [--all]  Spend summary from job run logs
+    clauck history [<name>] [--last N] [--days N] [--all]
+                                         Cross-job invocation timeline (most recent first)
+    clauck trace <invocation-id>         Print full log for a specific invocation
+                                         (invocation-id shown in `clauck history` output)
     clauck peek                          Live-tail all job logs (Ctrl+C to stop)
     clauck mcp                           Start the MCP stdio server
     clauck mcp --install                 Register MCP server in Claude Desktop and Claude Code
@@ -79,6 +83,7 @@ KNOWN_COMMANDS = {
     "doctor", "report", "peek", "work", "mcp",
     "add", "validate", "inspect", "remove", "delete", "rm", "rename", "mv", "next",
     "cost",
+    "history", "trace",
     "-h", "--help", "help",
 }
 
@@ -965,6 +970,113 @@ def cmd_logs(name: str, last: int = 5, show: int = 0, follow: bool = False) -> N
                         cost = f"${float(m.group(1)):.4f}"
         ts = log.stem.split("-", 1)[1] if "-" in log.stem else "?"
         print(f"  {ts:<30} {exit_line:<25} {cost:<10}  {log}")
+
+
+def _parse_log_summary(path: "Path") -> "dict | None":
+    """Extract name, invocation_id, exit_code, cost, terminal_reason from a log path."""
+    import re as _re
+
+    m = _re.search(r'^(.+?)-(\d{8}T\d{6}Z)-(\d+)$', path.stem)
+    if not m:
+        return None
+    result: dict = {
+        "name": m.group(1),
+        "ts_str": m.group(2),
+        "pid": m.group(3),
+        "invocation_id": f"{m.group(2)}-{m.group(3)}",
+        "exit_code": None,
+        "cost_usd": None,
+        "terminal_reason": None,
+        "path": path,
+    }
+    try:
+        for line in path.read_text().splitlines():
+            if result["exit_code"] is None and "exit_code=" in line:
+                em = _re.search(r"exit_code=(\d+)", line)
+                if em:
+                    result["exit_code"] = int(em.group(1))
+            if result["cost_usd"] is None and '"total_cost_usd"' in line:
+                cm = _re.search(r'"total_cost_usd":([\d.]+)', line)
+                if cm:
+                    result["cost_usd"] = float(cm.group(1))
+            if result["terminal_reason"] is None and '"terminal_reason"' in line:
+                tm = _re.search(r'"terminal_reason":\s*"([^"]+)"', line)
+                if tm:
+                    result["terminal_reason"] = tm.group(1)
+    except OSError:
+        pass
+    result["running"] = result["exit_code"] is None
+    return result
+
+
+def cmd_history(
+    job_filter: str = "",
+    last: int = 30,
+    days: int = 0,
+    all_time: bool = False,
+) -> None:
+    """Cross-job invocation timeline sorted by most recent first."""
+    import re as _re
+    from datetime import datetime as _dt, timezone as _tz
+
+    # Glob all log files, sorted newest first by mtime
+    logs = sorted(JOBS_DIR.glob("*-[0-9]*.log"), key=lambda p: p.stat().st_mtime, reverse=True)
+
+    cutoff_mtime: "float | None" = None
+    if days and not all_time:
+        import time as _time
+        cutoff_mtime = _time.time() - days * 86400
+
+    summaries = []
+    for log in logs:
+        # Skip DAG orchestration logs — they describe pipeline coordination, not job runs
+        if _re.search(r"-dag-\d{8}T\d{6}Z-\d+\.log$", log.name):
+            continue
+        if cutoff_mtime and log.stat().st_mtime < cutoff_mtime:
+            # Logs are sorted newest-first; once we go past the cutoff we're done
+            break
+        meta = _parse_log_summary(log)
+        if not meta:
+            continue
+        if job_filter and meta["name"] != job_filter:
+            continue
+        summaries.append(meta)
+
+    if not summaries:
+        print("  no invocations found")
+        return
+
+    display = summaries if all_time else summaries[:last]
+
+    name_w = max(len(s["name"]) for s in display) + 2
+    id_w = 24  # "20260418T010005Z-27481"
+    result_w = 20
+
+    print(f"  {'invocation':<{id_w}}  {'job':<{name_w}}  {'result':<{result_w}}  {'cost':>10}")
+    print(f"  {'─' * id_w}  {'─' * name_w}  {'─' * result_w}  {'─' * 10}")
+
+    for s in display:
+        if s["running"]:
+            result = "[active]"
+        elif s["exit_code"] == 0:
+            result = "ok"
+        else:
+            result = s.get("terminal_reason") or f"exit={s['exit_code']}"
+        result = result[:result_w]
+        cost = f"$  {s['cost_usd']:.4f}" if s["cost_usd"] is not None else ""
+        print(f"  {s['invocation_id']:<{id_w}}  {s['name']:<{name_w}}  {result:<{result_w}}  {cost:>10}")
+
+    if not all_time and len(summaries) > last:
+        print(f"\n  showing {last} of {len(summaries)} invocations  (--last N for more, --days N for window, --all for all-time)")
+
+
+def cmd_trace(invocation_id: str) -> None:
+    """Print the full log for a specific invocation ID (e.g. 20260418T010005Z-27481)."""
+    matches = list(JOBS_DIR.glob(f"*-{invocation_id}.log"))
+    if not matches:
+        print(f"  no log found for invocation: {invocation_id}", file=sys.stderr)
+        sys.exit(1)
+    print(matches[0].read_text(), end="")
 
 
 def cmd_marketplace(filter_tag: str = "") -> None:
@@ -3619,6 +3731,29 @@ def main() -> None:
         cmd_list()
     elif cmd == "next":
         cmd_next()
+    elif cmd == "history":
+        h_job = ""
+        h_last = 30
+        h_days = 0
+        h_all = "--all" in rest
+        if "--last" in rest:
+            idx = rest.index("--last")
+            if idx + 1 < len(rest):
+                h_last = int(rest[idx + 1])
+            rest = [r for i, r in enumerate(rest) if i != idx and i != idx + 1]
+        if "--days" in rest:
+            idx = rest.index("--days")
+            if idx + 1 < len(rest):
+                h_days = int(rest[idx + 1])
+            rest = [r for i, r in enumerate(rest) if i != idx and i != idx + 1]
+        rest = [r for r in rest if r != "--all"]
+        if rest:
+            h_job = rest[0]
+        cmd_history(h_job, h_last, h_days, h_all)
+    elif cmd == "trace" and rest:
+        cmd_trace(rest[0])
+    elif cmd == "trace":
+        die("usage: clauck trace <invocation-id>")
     elif cmd == "status":
         cmd_status()
     elif cmd == "fire" and rest:
