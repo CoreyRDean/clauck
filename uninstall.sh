@@ -40,6 +40,7 @@ fi
 say "Removing runtime scripts, skill, and marketplace"
 FILES=(
     "$HOME/.clauck/scheduler.py"
+    "$HOME/.clauck/sizing.py"
     "$HOME/.clauck/run-job.sh"
     "$HOME/.clauck/trigger-job.sh"
     "$HOME/.clauck/update-check.sh"

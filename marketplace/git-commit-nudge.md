@@ -3,11 +3,8 @@ name: git-commit-nudge
 version: "1.0.0"
 description: Every 4 hours, check for uncommitted changes or unpushed commits across your repos. Nudge via local feed file.
 cron: "0 */4 * * *"
-max_turns: 4
-max_budget_usd: 0.10
+complexity: 0.05   # scan configured repos for uncommitted state (low effort tier)
 cwd: ~
-effort: low
-model: haiku
 setting_sources: ""
 strict_mcp_config: true
 tags:

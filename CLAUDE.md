@@ -95,6 +95,20 @@ launchd (60s tick) → scheduler.py
 | LaunchAgent | `~/Library/LaunchAgents/com.$USER.claude-scheduler.plist` |
 | Global prompt | `~/.clauck/prompt.md` |
 
+### Cost policy
+
+Cost is a first-class transparent policy per `INTENT.md §3` non-negotiable #4 and §4 architectural property "Cost transparency." Every sizing decision — doctor invocations, scheduled job firings, natural-language-created jobs — flows through a single formula in `lib/sizing.py`. Knobs live in `~/.clauck/.clauck.config.json` under the `doctor` key; view/edit via `clauck config doctor`.
+
+**The complexity scale (0.0–1.0)** is the canonical way to declare a job's sizing. `lib/sizing.py` maps scale → `(model, effort, max_turns, max_budget_usd)` at run time via a banded lookup table (SCALE_PARAMS) and a context-growth-aware budget formula. Inspect what any scale derives with `clauck size <scale>`.
+
+**Per-field overrides** — if frontmatter includes `complexity: X` plus one or more of `max_turns` / `max_budget_usd` / `effort` / `model`, each explicit value wins over its derived counterpart for that field only. Use only when pinning a specific value is genuinely required; don't duplicate what the formula would derive.
+
+**Legacy compat** — jobs without `complexity:` continue to use explicit `max_turns`/`max_budget_usd`/`effort`/`model` fields, falling back to LEGACY_DEFAULTS (50 turns, $2.00, high effort, default model) if none are set. No existing job is forced to migrate.
+
+**Auto-skew** — doctor tracks a `scale_skew` offset in config. When a doctor run hits its budget ceiling, the skew bumps (default +0.05, capped at +0.30); on clean runs it decays. Self-balancing safety net so the formula self-tunes to the user's real workloads without intervention.
+
+**Source of truth** — `lib/sizing.py` is the single implementation. `scheduler.py` and the CLI import from it. Do not introduce parallel cost/sizing logic anywhere else; if you need a different curve, edit `SCALE_PARAMS` or add knobs, don't bypass.
+
 ### Frontmatter schema (complete)
 
 ```yaml
@@ -102,11 +116,14 @@ launchd (60s tick) → scheduler.py
 name: <string>                       # optional; defaults to filename stem
 description: <string>                # one-line purpose
 cron: "<m> <h> <dom> <mon> <dow>"    # 5-field cron; omit = ad-hoc only
-max_turns: <int>                     # default 50
-max_budget_usd: <float>              # default 2.00
+complexity: <float>                  # 0.0–1.0 scale; derives the four sizing
+                                     # fields below. Preferred over setting
+                                     # them directly. See Cost policy above.
+max_turns: <int>                     # default 50; override when set
+max_budget_usd: <float>              # default 2.00; override when set
 cwd: <path>                          # default ~
-effort: <low|medium|high>            # default high
-model: <alias-or-full-name>          # optional; e.g. "haiku", "sonnet"
+effort: <low|medium|high>            # default high; override when set
+model: <alias-or-full-name>          # optional; e.g. "haiku", "sonnet". override when set
 setting_sources: <csv-or-"">         # "" = skip plugins/settings (cost reduction)
 strict_mcp_config: <bool>            # true = no MCP surface (biggest cost reduction)
 debounce_seconds: <int>              # suppress re-fires within N seconds

@@ -3,11 +3,8 @@ name: github-pr-digest
 version: "1.0.0"
 description: Weekday digest of PRs needing your attention — reviews requested, your stale drafts, and recently merged.
 cron: "0 14 * * 1-5"
-max_turns: 8
-max_budget_usd: 0.25
+complexity: 0.20   # weekday multi-query digest (reviews + drafts + merged)
 cwd: ~
-effort: low
-model: haiku
 setting_sources: ""
 tags:
   - productivity

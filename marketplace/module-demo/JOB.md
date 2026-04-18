@@ -2,11 +2,10 @@
 name: module-demo
 version: "1.0.0"
 description: Reference module-format marketplace job. Demonstrates the <name>/JOB.md directory shape for multi-file jobs.
-max_turns: 1
-max_budget_usd: 0.02
+complexity: 0.05      # minimum example — trivial work
+max_turns: 1          # override: pedagogical minimum, tighter than derived
+max_budget_usd: 0.02  # override: pedagogical minimum, below min_budget floor
 cwd: ~
-effort: low
-model: haiku
 setting_sources: ""
 strict_mcp_config: true
 tags:

@@ -3,11 +3,8 @@ name: workspace-cleanup
 version: "1.0.0"
 description: Weekly scan of Desktop and Documents for stale files, generic names, and clutter. Report only — never deletes.
 cron: "0 17 * * 0"
-max_turns: 5
-max_budget_usd: 0.10
+complexity: 0.10   # weekly ls-and-categorize on two directories (medium effort tier)
 cwd: ~
-effort: low
-model: haiku
 setting_sources: ""
 strict_mcp_config: true
 tags:
