@@ -3685,6 +3685,7 @@ def _write_auto_draft(
                 pass
 
     import datetime as _dt
+    import uuid as _uuid
     ts = _dt.datetime.utcnow().strftime("%Y%m%dT%H%M%S%f")[:-3] + "Z"
     safe_source = source.replace("/", "-").replace(" ", "-")[:40]
     draft = {
@@ -3697,7 +3698,7 @@ def _write_auto_draft(
         "ts": ts,
         "dedupe_key": dedupe_key,
     }
-    path = REPORTS_DIR / f"{ts}-{safe_source}-auto.json"
+    path = REPORTS_DIR / f"{ts}-{safe_source}-{_uuid.uuid4().hex[:8]}-auto.json"
     path.write_text(json.dumps(draft, indent=2) + "\n")
     return path
 
