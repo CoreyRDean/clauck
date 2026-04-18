@@ -596,6 +596,16 @@ complexity: 0.20
 strict_mcp_config: true    # skip MCP surface; haiku stays selected
 ```
 
+**Promotion mapping** (what the original band becomes when the bump fires):
+
+| Original (derived) | Promoted to |
+|---|---|
+| haiku / low | sonnet / medium  *(no sonnet/low band exists)* |
+| haiku / medium | sonnet / medium |
+| haiku / high | sonnet / high |
+
+Turns stay pinned to the scale-derived value — the task complexity hasn't changed, only the context-fit concern.
+
 Preview either path with `clauck size`:
 
 ```

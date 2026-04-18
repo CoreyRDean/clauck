@@ -109,6 +109,8 @@ Cost is a first-class transparent policy per `INTENT.md §3` non-negotiable #4 a
 
 **MCP auto-promote** — empirical hard rule: if the user's full MCP surface loads (frontmatter does NOT set `strict_mcp_config: true`, or doctor stage-2 which always loads MCP), haiku auto-promotes to sonnet. The MCP surface (~150k tokens of tool descriptions) regularly approaches haiku's effective working context and triggers compaction loops that burn budget without progress. The promotion is surfaced in the sizing explanation string and via `clauck size <scale>`'s `strict_mcp:` line. To run a job on haiku, either set `strict_mcp_config: true` in frontmatter (the job won't have MCP tools available) or accept the sonnet bump.
 
+*Migration note:* installed jobs that previously derived haiku under MCP were silently truncating on the compaction loop; they now correctly route to sonnet. Per-run cost rises ~3–4× on those jobs, but runs actually complete. Jobs that explicitly strip MCP (`strict_mcp_config: true` in frontmatter) keep their prior haiku pricing unchanged.
+
 **Source of truth** — `lib/sizing.py` is the single implementation. `scheduler.py` and the CLI import from it. Do not introduce parallel cost/sizing logic anywhere else; if you need a different curve, edit `SCALE_PARAMS` or add knobs, don't bypass.
 
 ### Frontmatter schema (complete)

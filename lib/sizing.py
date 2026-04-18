@@ -164,22 +164,28 @@ def _promote_for_mcp(
     """
     if model != "haiku":
         return model, effort, turns, rate, False
+    # haiku/low promotes to sonnet/medium (SCALE_PARAMS has no sonnet/low band
+    # — the lowest sonnet tier is medium). haiku/medium and haiku/high find
+    # exact effort matches in the sonnet bands.
     target_effort = effort if effort != "low" else "medium"
     for _ceil, m, eff, _t, r in SCALE_PARAMS:
         if m == "sonnet" and eff == target_effort:
             return m, eff, turns, r, True
-    # Fallback: if no matching sonnet band found (shouldn't happen with
-    # current table), return first sonnet band regardless of effort.
-    for _ceil, m, eff, _t, r in SCALE_PARAMS:
-        if m == "sonnet":
-            return m, eff, turns, r, True
-    return model, effort, turns, rate, False  # no sonnet band — keep haiku
+    # If we got here, SCALE_PARAMS has been reshuffled in a way that
+    # breaks the promotion contract. Raising is correct: we promised the
+    # caller an auto-promotion, and silently returning the wrong tier
+    # (or no promotion at all) would mask the table bug at runtime.
+    raise RuntimeError(
+        f"SCALE_PARAMS has no sonnet band matching effort {target_effort!r}; "
+        "cannot auto-promote haiku. Restore a sonnet/medium or sonnet/high band."
+    )
 
 
 def compute_sizing(
     scale: float,
     context_tokens: int,
     config: Optional[dict] = None,
+    *,
     strict_mcp: bool = False,
 ) -> dict:
     """Derive full sizing from a complexity scale and a rough context size.
@@ -223,9 +229,17 @@ def compute_sizing(
 
     # Auto-promote haiku → sonnet when MCP surface is loaded — empirical
     # rule to avoid haiku's compaction loop on MCP-heavy contexts.
-    model, effort, turns, rate, mcp_promoted = _promote_for_mcp(
-        model, effort, turns, rate
-    ) if not strict_mcp else (model, effort, turns, rate, False)
+    # Turns stays pinned to the scale-derived value: `scale` encoded the
+    # task's complexity, and turns tracked that. Promotion is a context-
+    # fit correction (haiku can't hold the MCP surface), not a complexity
+    # correction, so the task still takes the same number of steps — it
+    # just runs them on a model with more headroom.
+    if strict_mcp:
+        mcp_promoted = False
+    else:
+        model, effort, turns, rate, mcp_promoted = _promote_for_mcp(
+            model, effort, turns, rate
+        )
 
     growth = 1.0 + turns * float(cfg["context_growth_per_turn"]) / 2.0
     base_cost = turns * rate * growth
