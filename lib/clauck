@@ -1723,7 +1723,15 @@ def _build_mcpb_bundle(
             "entry_point": "launch.py",
             "mcp_config": {
                 "command": "python3",
-                "args": ["launch.py"],
+                # ${__dirname} is the MCPB runtime variable that expands to
+                # the extracted bundle directory. Without it, Claude Desktop
+                # runs `python3 launch.py` from an arbitrary cwd (observed
+                # as `/` in practice), resolving to `//launch.py` → ENOENT.
+                # The Anthropic-shipped Filesystem MCP manifest uses this
+                # exact pattern (`${__dirname}/dist/index.js`), confirming
+                # it's the intended mechanism for referencing in-bundle
+                # entry points.
+                "args": ["${__dirname}/launch.py"],
             },
         },
     }
