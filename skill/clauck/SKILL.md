@@ -191,15 +191,32 @@ Each notification shows the job name, success/failure, and cost if available —
 
 The notification fires after the claude session exits, regardless of success or failure. It is emitted via `osascript` and requires no additional software. Silent (no banner) if the user has disabled notifications for Terminal in macOS System Settings → Notifications.
 
-## MCP server (Claude Desktop integration)
+## MCP server (Claude Desktop + Claude Code integration)
 
 clauck ships a stdio MCP server that exposes job management as tools for any MCP-capable client (Claude Desktop, Claude Code, etc.).
 
-**Enable once:**
+**Enable once** (run by `install.sh` automatically; re-run any time to refresh):
+
 ```
-clauck mcp --install   # writes entry to ~/Library/Application Support/Claude/claude_desktop_config.json
-                       # restart Claude Desktop afterward
+clauck mcp --install
 ```
+
+What that does:
+
+- **Claude Code** — runs `claude mcp add --scope user clauck <clauck-bin> mcp` so the server appears in `claude mcp list` globally across projects. Idempotent (`claude mcp get clauck` is checked first).
+- **Claude Desktop** — builds a minimal `.mcpb` bundle at `~/.clauck/clauck.mcpb` (manifest points at the installed clauck binary) and runs `open` on it, triggering Claude Desktop's install dialog. **Click Install in the dialog to register.** Claude Desktop's new architecture requires explicit user confirmation — clauck cannot bypass it. Re-running `clauck mcp --install` rebuilds and re-opens the bundle.
+- **Cleanup** — removes any stale `mcpServers.clauck` entries from the legacy config files (`~/.claude/settings.json`, `~/Library/Application Support/Claude/claude_desktop_config.json`) so old clauck installs don't leave ghost registrations.
+
+**Opt out:** `clauck config set no_mcp_install true` or pass `--no-mcp` to `install.sh`. Persisted in `~/.clauck/.clauck.config.json`.
+
+**Verify registration:**
+
+```bash
+claude mcp list | grep clauck            # Claude Code: should list `clauck`
+ls ~/.clauck/clauck.mcpb                  # Claude Desktop: bundle exists
+```
+
+If Claude Desktop's dialog didn't appear, re-open the bundle manually: `open ~/.clauck/clauck.mcpb`.
 
 **Available tools:**
 
