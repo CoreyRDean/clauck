@@ -1851,6 +1851,18 @@ def cmd_mcp_install() -> None:
     # bare version. Strip a single leading 'v' if present.
     if version.startswith("v"):
         version = version[1:]
+    # Append semver build metadata so every rebuild looks like a distinct
+    # version to Claude Desktop. Without this, re-opening the `.mcpb` after
+    # any code change (e.g., a manifest fix) is a silent no-op: Desktop
+    # sees the same `name` + `version` and keeps the already-installed
+    # (potentially stale) copy. Build metadata is semver-compliant
+    # (PEP 440-adjacent; `1.5.7+build.20260418T143059Z` is valid) and is
+    # ignored by precedence rules — it's the documented mechanism for
+    # "same release, different build" signaling. Timestamp granularity is
+    # seconds; two rebuilds in the same second shouldn't happen in any
+    # realistic install flow, but if they did, the second would no-op
+    # exactly as today.
+    version = f"{version}+build.{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')}"
     bundle_path = JOBS_DIR / "clauck.mcpb"
     try:
         _build_mcpb_bundle(clauck_bin, bundle_path, version)
