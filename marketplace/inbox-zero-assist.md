@@ -3,11 +3,8 @@ name: inbox-zero-assist
 version: "1.0.0"
 description: End-of-day scan of unread Gmail threads older than 48h. Suggests actions (reply, archive, delegate) in a local file. Never sends.
 cron: "0 22 * * 1-5"
-max_turns: 8
-max_budget_usd: 0.25
+complexity: 0.25   # Gmail scan + per-thread action suggestions + local write
 cwd: ~
-effort: low
-model: haiku
 setting_sources: ""
 tags:
   - productivity

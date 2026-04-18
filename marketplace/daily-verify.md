@@ -3,11 +3,8 @@ name: daily-verify
 version: "1.0.0"
 description: Daily deep-chain verification. Exercises full launchd → claude → MCP → external-tool chain so silent MCP drift is caught within 24h.
 cron: "0 14 * * *"
-max_turns: 5
-max_budget_usd: 0.40
+complexity: 0.15   # chain-test: few reads + report, generous budget for reliability
 cwd: ~
-effort: low
-model: haiku
 setting_sources: ""
 tags:
   - verification

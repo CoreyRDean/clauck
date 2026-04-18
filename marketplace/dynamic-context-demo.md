@@ -2,9 +2,7 @@
 name: dynamic-context-demo
 description: Demonstrates {{cmd:}} inline bash templating — injects live date and git state into the prompt body at dispatch time, before the model receives it.
 cron: ""
-max_turns: 3
-max_budget_usd: 0.05
-effort: low
+complexity: 0.05   # demo job: trivial, demonstrates templating
 strict_mcp_config: true
 setting_sources: ""
 tags:

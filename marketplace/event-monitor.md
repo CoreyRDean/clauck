@@ -5,11 +5,8 @@ description: Time-bounded health checker. Runs every 15 minutes inside a configu
 cron: "*/15 * * * *"
 valid_after: "2026-01-01T00:00:00"
 expires_after: "2026-01-01T06:00:00"
-max_turns: 5
-max_budget_usd: 0.10
+complexity: 0.10   # single URL health check + conditional alert
 cwd: ~
-effort: low
-model: haiku
 setting_sources: ""
 inputs:
   - {name: HEALTH_URL, default: "https://example.com/health"}

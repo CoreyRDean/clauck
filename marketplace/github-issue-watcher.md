@@ -2,10 +2,7 @@
 name: gh-watch-0
 description: "Watch GitHub issue for state changes: closed, PR opened, label changes. Posts updates to Slack self-DM or a local file."
 cron: "0 12 * * *"
-max_turns: 12
-max_budget_usd: 0.15
-effort: low
-model: haiku
+complexity: 0.20   # fetch issue, compare to prior state, post diff if changed
 strict_mcp_config: false
 tags:
   - github
