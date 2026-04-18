@@ -14,7 +14,7 @@ Usage:
     clauck rename <old> <new>            Rename a job, migrating all state atomically (also: mv)
     clauck logs <name> [--last N]        Show recent logs (paths + summary); marks active run
     clauck logs <name> --show [N]        Print content of Nth most recent log (default: 1)
-    clauck logs <name> --follow          Tail the active run; falls back to most recent log
+    clauck logs <name> --follow          Tail the active run; for DAG jobs, tails the orchestration log
     clauck marketplace                    Browse pre-made jobs
     clauck marketplace info <name>        Show full details for a marketplace job
     clauck marketplace search <query>     Search marketplace by keyword
@@ -701,6 +701,83 @@ def _active_log(name: str) -> "Path | None":
     return None
 
 
+def _active_dag_log(name: str) -> "Path | None":
+    """Return the currently-running DAG orchestration log for *name*, or None.
+
+    DAG logs: ~/.clauck/<name>-dag-<ts>-<pid>.log
+    Active detection: most recent log without an exit_code tombstone whose
+    pid= header line refers to a live process.
+    """
+    import os as _os
+
+    logs = sorted(
+        JOBS_DIR.glob(f"{name}-dag-[0-9]*.log"),
+        key=lambda p: p.stat().st_mtime,
+        reverse=True,
+    )
+    for log in logs:
+        text = log.read_text()
+        if "--- exit_code=" in text:
+            continue
+        for line in text.splitlines()[:6]:
+            if line.startswith("pid="):
+                try:
+                    pid = int(line[4:].strip())
+                    _os.kill(pid, 0)
+                    return log
+                except (OSError, ValueError):
+                    pass
+        break  # no tombstone but pid is dead — stale run
+    return None
+
+
+def _follow_dag_log(path: "Path") -> None:
+    """Stream a DAG orchestration log, annotating stage events as they land."""
+    import json as _json
+    import time as _time
+
+    def _annotate(line: str) -> str:
+        if "event: {" not in line:
+            return line
+        try:
+            payload = _json.loads(line.split("event: ", 1)[1])
+            job = payload.get("job", "?")
+            event = payload.get("event", "?")
+            layer = payload.get("layer", "?")
+            exit_code = payload.get("exit_code")
+            cost = payload.get("cost")
+            if event == "started":
+                return f"  -> [layer {layer}] starting: {job}"
+            if event in ("completed", "done"):
+                suffix = ""
+                if exit_code is not None:
+                    suffix += f"  exit={exit_code}"
+                if cost is not None:
+                    suffix += f"  ${float(cost):.4f}"
+                return f"  ok [layer {layer}] done: {job}{suffix}"
+            if event in ("error", "failed"):
+                return f"  !! [layer {layer}] failed: {job}  exit={exit_code}"
+        except Exception:
+            pass
+        return line
+
+    done = False
+    with open(path) as fh:
+        content = fh.read()
+        for line in content.splitlines():
+            print(_annotate(line), flush=True)
+        done = "--- exit_code=" in content
+        while not done:
+            chunk = fh.read()
+            if chunk:
+                for line in chunk.splitlines():
+                    print(_annotate(line), flush=True)
+                if "--- exit_code=" in chunk:
+                    done = True
+            else:
+                _time.sleep(0.3)
+
+
 def _follow_log(path: "Path", lock_dir: "Path") -> None:
     """Stream a log file to stdout, exiting when the exit_code tombstone lands."""
     import time as _time
@@ -734,6 +811,25 @@ def cmd_logs(name: str, last: int = 5, show: int = 0, follow: bool = False) -> N
     active = _active_log(name)
 
     if follow:
+        # For DAG pipeline jobs, prefer the orchestration log over the individual job log.
+        # The DAG log captures cross-job coordination, stage transitions, and the full
+        # pipeline timeline — none of which appears in a single node's log.
+        dag_active = _active_dag_log(name)
+        dag_logs = sorted(
+            JOBS_DIR.glob(f"{name}-dag-[0-9]*.log"),
+            key=lambda p: p.stat().st_mtime,
+            reverse=True,
+        )
+        if dag_active:
+            print(f"  tailing active DAG run: {dag_active.name}  (Ctrl-C to stop)", flush=True)
+            _follow_dag_log(dag_active)
+            return
+        if dag_logs:
+            dag_target = dag_logs[0]
+            print(f"  no active DAG run — tailing most recent: {dag_target.name}", flush=True)
+            _follow_dag_log(dag_target)
+            return
+        # No DAG logs: fall back to the individual job log.
         target = active or (logs[0] if logs else None)
         if not target:
             print(f"  no logs found for: {name}")
