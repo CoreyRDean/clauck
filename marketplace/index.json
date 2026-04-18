@@ -1,6 +1,6 @@
 {
   "version": "v0.1.2",
-  "description": "Curated pre-made scheduled-job prompts for clauck. Browse by category or tags; ask Claude to copy one into your scheduled-jobs directory to install.",
+  "description": "Curated pre-made Clauck Cycles (scheduled-job prompts). Browse by category or tags; ask Claude to copy one into your scheduled-jobs directory to install.",
   "jobs": [
     {
       "name": "morning-brief",

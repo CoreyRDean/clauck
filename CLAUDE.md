@@ -188,3 +188,13 @@ clauck version                          # shows channel + build source + git SHA
 2. Add entry to `marketplace/index.json`.
 3. Include `<!-- CUSTOMIZE BEFORE INSTALLING: -->` comment for user-editable fields.
 4. Test: `bash install.sh --yes` then `clauck fire <name>`. Include log showing `exit_code=0` in PR.
+
+### Brand terminology
+
+**"Cycle" / "Clauck Cycles"** is the marketing/brand name for a clauck job. The name echoes "clock cycles" — the right pronunciation cue for "clauck."
+
+**Use "Cycle" in:** README landing copy, marketplace human-readable descriptions, release notes, external-facing docs. Example: "Install the morning-brief Cycle."
+
+**Use "job" in:** CLI verbs (`clauck fire`, `clauck list`), code identifiers, frontmatter field names, MCP tool schemas, agent-facing contracts, error messages, and all technical documentation. Example: "the `name:` field", "the job fires at 9am."
+
+The two terms name the same primitive. The distinction is register only — marketing vs. technical.
