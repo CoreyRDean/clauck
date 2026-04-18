@@ -12,10 +12,8 @@ tags:
   - monitoring
   - issue-watcher
 inputs:
-  - name: ISSUE_URL
-    default: "https://github.com/owner/repo/issues/0"
-  - name: NOTIFY_CHANNEL
-    default: ""
+  - {name: ISSUE_URL, default: "https://github.com/owner/repo/issues/0"}
+  - {name: NOTIFY_CHANNEL, default: ""}
 ---
 <!-- CUSTOMIZE BEFORE INSTALLING:
   1. Set the `name:` field to something unique, e.g. gh-watch-123
