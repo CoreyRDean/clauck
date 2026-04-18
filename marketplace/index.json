@@ -184,6 +184,26 @@
           "Add your own {{cmd:}} markers to inject other live shell context."
         ]
       }
+    },
+    {
+      "name": "github-issue-watcher",
+      "version": "1.0.0",
+      "path": "github-issue-watcher.md",
+      "category": "monitoring",
+      "tags": ["monitoring", "github", "issue-watcher", "daily", "notifications"],
+      "one_line": "Daily watcher for a single GitHub issue: alerts on close, PR linkage, or label changes. Installed automatically by `clauck report`.",
+      "schedule": "daily at 12:00 UTC (configurable)",
+      "cost_per_run_usd_approx": 0.04,
+      "runs_per_month_approx": 30,
+      "monthly_cost_usd_approx": 1.20,
+      "requires": {
+        "mcps": "none required (Slack optional for push notifications)",
+        "setup": [
+          "Set name: to something unique, e.g. gh-watch-123",
+          "Set ISSUE_URL default to the GitHub issue URL to watch.",
+          "Optionally set NOTIFY_CHANNEL to a Slack DM channel ID for push notifications."
+        ]
+      }
     }
   ]
 }

@@ -21,6 +21,7 @@ _mod = _loader.load_module()
 _find_pending_drafts = _mod._find_pending_drafts
 _build_interactive_mining_prompt = _mod._build_interactive_mining_prompt
 _build_report_exec_prompt = _mod._build_report_exec_prompt
+_install_issue_watcher = _mod._install_issue_watcher
 
 
 # ---------------------------------------------------------------------------
@@ -149,3 +150,53 @@ class TestBuildReportExecPromptMineField(unittest.TestCase):
     def test_empty_description_fallback(self):
         prompt = _build_report_exec_prompt("")
         self.assertIn("(no description provided)", prompt)
+
+
+# ---------------------------------------------------------------------------
+# _install_issue_watcher
+# ---------------------------------------------------------------------------
+
+
+class TestInstallIssueWatcher(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self._orig_jobs = _mod.JOBS_DIR
+        _mod.JOBS_DIR = Path(self.tmp.name)
+
+    def tearDown(self):
+        _mod.JOBS_DIR = self._orig_jobs
+        self.tmp.cleanup()
+
+    def test_creates_job_file(self):
+        url = "https://github.com/owner/repo/issues/42"
+        name = _install_issue_watcher(url)
+        job = Path(self.tmp.name) / f"{name}.md"
+        self.assertTrue(job.exists(), f"{job} was not created")
+
+    def test_job_name_contains_issue_number(self):
+        url = "https://github.com/owner/repo/issues/99"
+        name = _install_issue_watcher(url)
+        self.assertIn("99", name)
+
+    def test_job_file_contains_issue_url(self):
+        url = "https://github.com/acme/widget/issues/7"
+        _install_issue_watcher(url)
+        job = Path(self.tmp.name) / "gh-watch-7.md"
+        content = job.read_text()
+        self.assertIn(url, content)
+
+    def test_job_file_has_valid_cron(self):
+        url = "https://github.com/acme/widget/issues/7"
+        _install_issue_watcher(url)
+        job = Path(self.tmp.name) / "gh-watch-7.md"
+        self.assertIn("cron:", job.read_text())
+
+    def test_notify_channel_baked_in(self):
+        url = "https://github.com/acme/widget/issues/5"
+        _install_issue_watcher(url, notify_channel="C123ABC")
+        job = Path(self.tmp.name) / "gh-watch-5.md"
+        self.assertIn("C123ABC", job.read_text())
+
+    def test_invalid_url_raises(self):
+        with self.assertRaises(ValueError):
+            _install_issue_watcher("https://gitlab.com/owner/repo/issues/1")

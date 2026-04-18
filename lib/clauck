@@ -2731,6 +2731,102 @@ Produce the actionable result directly. No preamble. No explanation of your proc
 If you attempt to use a native scheduling tool, you have failed."""
 
 
+_WATCHER_PROMPT_BODY = """\
+You are a GitHub issue state watcher. Your job is to detect meaningful state changes on one GitHub issue and surface them to the user.
+
+## Issue to watch
+
+URL: {{env:CLAUCK_INPUT_ISSUE_URL}}
+
+## What to check
+
+1. Run `gh issue view <URL> --json state,title,labels,comments,closedAt` to get current state.
+2. Read the last known state from `~/.clauck/.state/<job-name>.json` if it exists (ignore file-not-found).
+3. Compare current vs last state. Interesting changes:
+   - Issue **closed** or **reopened**
+   - A label was **added or removed** (especially milestone/target/priority labels)
+   - A **PR was opened** that references this issue — check via `gh pr list --search "closes #<number>" --repo <owner>/<repo> --json number,title,url,state`
+   - Issue was added to a **milestone** or **project**
+4. If any interesting change is detected, report it. If no change, exit silently without posting.
+
+## How to report
+
+Interesting change detected:
+
+- If `CLAUCK_INPUT_NOTIFY_CHANNEL` is non-empty: post a brief Slack message to that channel ID via the Slack MCP `slack_send_message` tool.
+- Otherwise: append to `~/Documents/clauck/<job-name>-updates.md` (create file/dir if needed).
+
+Format:
+
+```
+📌 *<issue title>*
+<change summary — one line each>
+<issue URL>
+```
+
+## State persistence
+
+After each check, write current state to `~/.clauck/.state/<job-name>.json`:
+
+```json
+{
+  "state": "open|closed",
+  "labels": ["label1"],
+  "linked_prs": [123],
+  "checked_at": "ISO-8601 timestamp"
+}
+```
+
+`<job-name>` is the `name:` field from this job's frontmatter.
+
+## Rules
+
+- Do not post if nothing changed since last check.
+- Do not post the issue body — only state changes.
+- If `gh` is not on PATH, write a one-line error to the updates file and exit.
+- If the issue URL is the default placeholder (`/issues/0`), write a setup reminder to the updates file and exit.
+"""
+
+
+def _install_issue_watcher(issue_url: str, notify_channel: str = "") -> str:
+    """Install a watcher job for a GitHub issue. Returns the job name."""
+    import re as _re
+
+    m = _re.search(r"github\.com/([^/]+/[^/]+)/issues/(\d+)", issue_url)
+    if not m:
+        raise ValueError(f"Cannot parse issue URL: {issue_url}")
+    repo = m.group(1)
+    number = m.group(2)
+
+    job_name = f"gh-watch-{number}"
+    job_path = JOBS_DIR / f"{job_name}.md"
+
+    notify_default = notify_channel or ""
+    frontmatter = f"""\
+---
+name: {job_name}
+description: "Watch github.com/{repo}/issues/{number} for state changes"
+cron: "0 12 * * *"
+max_turns: 12
+max_budget_usd: 0.15
+effort: low
+model: haiku
+strict_mcp_config: false
+tags:
+  - github
+  - monitoring
+  - issue-watcher
+inputs:
+  - name: ISSUE_URL
+    default: "{issue_url}"
+  - name: NOTIFY_CHANNEL
+    default: "{notify_default}"
+---
+"""
+    job_path.write_text(frontmatter + "\n" + _WATCHER_PROMPT_BODY)
+    return job_name
+
+
 def _find_pending_drafts() -> list:
     """Return list of draft paths in REPORTS_DIR, newest first."""
     if not REPORTS_DIR.exists():
@@ -3140,7 +3236,38 @@ def cmd_report(tail: str = "", inbox: bool = False) -> None:
     if create_result.returncode != 0:
         print(f"  ! gh issue create failed: {create_result.stderr.strip()}", file=sys.stderr)
         sys.exit(1)
-    print(f"  \u2713 submitted: {create_result.stdout.strip()}")
+    issue_url = create_result.stdout.strip()
+    print(f"  \u2713 submitted: {issue_url}")
+
+    _offer_issue_watcher(issue_url)
+
+
+def _offer_issue_watcher(issue_url: str) -> None:
+    """Prompt the user to install a daily watcher job for the submitted issue."""
+    if not (sys.stdin.isatty() and sys.stdout.isatty()):
+        return
+    if not issue_url.startswith("https://github.com/"):
+        return
+
+    print()
+    try:
+        resp = input(
+            "  Watch this issue? I'll post updates when it closes, gets a PR, or changes labels. [Y/n] "
+        ).strip().lower()
+    except (EOFError, KeyboardInterrupt):
+        print()
+        return
+
+    if resp in ("n", "no"):
+        return
+
+    try:
+        job_name = _install_issue_watcher(issue_url)
+        print(f"  \u2713 watcher installed: {job_name} (daily at noon UTC)")
+        print(f"    Updates → ~/Documents/clauck/{job_name}-updates.md")
+        print(f"    Pause anytime: clauck pause {job_name}")
+    except Exception as exc:
+        print(f"  ! could not install watcher: {exc}", file=sys.stderr)
 
 
 def cmd_semantic(text: str) -> None:
