@@ -1636,8 +1636,128 @@ def cmd_version() -> None:
     print(f"  repo:      {repo}")
 
 
+def _strip_stale_mcp_entry(cfg_path: Path, server_key: str = "clauck") -> bool:
+    """Remove a previously-written `mcpServers.<key>` entry from a JSON config.
+
+    Prior versions of cmd_mcp_install wrote clauck entries directly into
+    `~/.claude/settings.json` and `~/Library/Application Support/Claude/
+    claude_desktop_config.json`. Neither path is authoritative anymore:
+    Claude Code uses `claude mcp add` (which writes to ~/.claude.json), and
+    Claude Desktop uses .mcpb bundles opened via the GUI. Leaving the stale
+    entries behind creates ghost registrations that either silently do
+    nothing or conflict with the current-API registration. This helper
+    removes the stale key and preserves the rest of the file.
+
+    Returns True when something was removed, False when no stale entry
+    existed (including when the file is absent).
+    """
+    if not cfg_path.exists():
+        return False
+    try:
+        data = json.loads(cfg_path.read_text())
+    except (OSError, ValueError):
+        return False
+    servers = data.get("mcpServers")
+    if not isinstance(servers, dict) or server_key not in servers:
+        return False
+    servers.pop(server_key, None)
+    if not servers:
+        data.pop("mcpServers", None)
+    try:
+        cfg_path.write_text(json.dumps(data, indent=2) + "\n")
+    except OSError:
+        return False
+    return True
+
+
+def _build_mcpb_bundle(
+    clauck_bin: str,
+    bundle_path: Path,
+    version: str,
+) -> None:
+    """Generate a minimal .mcpb bundle pointing at an already-installed clauck.
+
+    Structure:
+      clauck.mcpb/
+        manifest.json       # MCPB v0.3 manifest
+        launch.py           # Real entry_point — 3-line exec shim to clauck
+
+    The launch.py shim actually does what `entry_point` promises per the
+    MCPB spec (a real executable entrypoint in the bundle). Claude Desktop
+    invokes it via the mcp_config command (python3 launch.py); launch.py
+    execs the already-installed clauck binary so updates stay aligned
+    with clauck's own release cadence (the bundle never embeds the clauck
+    runtime itself). This is the "thin shim" pattern done spec-correctly
+    rather than relying on undocumented loader leniency.
+
+    `compatibility.platforms: ["darwin"]` matches INTENT.md §7 (macOS-only).
+
+    Built with stdlib zipfile rather than `@anthropic-ai/mcpb`'s `mcpb
+    pack` — preserves clauck's "no npm dependency" non-negotiable. Output
+    format is indistinguishable from `mcpb pack`'s from Claude Desktop's
+    perspective (spec defines `.mcpb` as "a zip archive containing the
+    local MCP server as well as a manifest.json").
+
+    Overwrites any existing bundle at bundle_path. Caller is responsible
+    for invoking `open` on the finished bundle.
+    """
+    import zipfile
+
+    manifest = {
+        "manifest_version": "0.3",
+        "name": "clauck",
+        "version": version,
+        "description": (
+            "clauck MCP server — expose scheduled jobs and system health "
+            "as MCP tools (list_jobs, fire_job, get_status, etc.)"
+        ),
+        "author": {"name": "CoreyRDean"},
+        "compatibility": {
+            # INTENT.md §7: macOS is the only supported platform. Declaring
+            # this explicitly means Claude Desktop on Linux/Windows won't
+            # offer to install the bundle at all.
+            "platforms": ["darwin"],
+        },
+        "server": {
+            "type": "python",
+            "entry_point": "launch.py",
+            "mcp_config": {
+                "command": "python3",
+                "args": ["launch.py"],
+            },
+        },
+    }
+
+    # Real 3-line exec shim. The clauck binary path is baked in at build
+    # time, so the shim has zero runtime dependencies beyond /usr/bin/env
+    # python3 — already a clauck non-negotiable.
+    launcher = (
+        "#!/usr/bin/env python3\n"
+        f"# clauck MCP launcher — execs the installed clauck binary.\n"
+        f"# Built by clauck's cmd_mcp_install; regenerate by re-running\n"
+        f"# `clauck mcp --install`.\n"
+        f"import os\n"
+        f"os.execv({clauck_bin!r}, [{clauck_bin!r}, 'mcp'])\n"
+    )
+
+    bundle_path.parent.mkdir(parents=True, exist_ok=True)
+    with zipfile.ZipFile(bundle_path, "w", zipfile.ZIP_DEFLATED) as z:
+        z.writestr("manifest.json", json.dumps(manifest, indent=2))
+        # Launcher needs to be readable by Claude Desktop; zip doesn't
+        # preserve the +x bit but python3 interprets by invocation.
+        z.writestr("launch.py", launcher)
+
+
 def cmd_mcp_install() -> None:
-    """Write the clauck MCP server entry into Claude Desktop and Claude Code configs."""
+    """Register the clauck MCP server with Claude Code and Claude Desktop.
+
+    Claude Code: uses `claude mcp add --scope user` (authoritative).
+    Claude Desktop: builds a .mcpb bundle and opens it via `open`, which
+    triggers Claude Desktop's install dialog. The user clicks Install.
+
+    Also removes stale entries from the legacy config files that earlier
+    versions of clauck wrote to directly.
+    """
     import shutil as _shutil
 
     config = load_config()
@@ -1647,45 +1767,100 @@ def cmd_mcp_install() -> None:
         return
 
     clauck_bin = _shutil.which("clauck") or str(HOME / ".local" / "bin" / "clauck")
-    entry = {"command": clauck_bin, "args": ["mcp"]}
 
-    installed_any = False
+    # ── Clean up stale entries written by prior versions ─────────────────
+    # These paths are no longer authoritative for either Claude Code or
+    # Claude Desktop; leaving old clauck entries there produces ghost
+    # registrations that do nothing but confuse `claude mcp list` output
+    # and Claude Desktop's server list.
+    stale_paths = [
+        HOME / ".claude" / "settings.json",
+        HOME / "Library" / "Application Support" / "Claude" / "claude_desktop_config.json",
+    ]
+    for p in stale_paths:
+        if _strip_stale_mcp_entry(p, "clauck"):
+            print(f"  cleaned stale entry: {p}")
 
-    # Claude Desktop
-    desktop_cfg = (
-        HOME / "Library" / "Application Support" / "Claude" / "claude_desktop_config.json"
-    )
-    try:
-        cfg = json.loads(desktop_cfg.read_text()) if desktop_cfg.exists() else {}
-    except (OSError, ValueError):
-        cfg = {}
-    cfg.setdefault("mcpServers", {})["clauck"] = entry
-    desktop_cfg.parent.mkdir(parents=True, exist_ok=True)
-    desktop_cfg.write_text(json.dumps(cfg, indent=2) + "\n")
-    print(f"  Claude Desktop: {desktop_cfg}")
-    print("  (restart Claude Desktop to load the MCP server)")
-    installed_any = True
+    # ── Claude Code: use `claude mcp add --scope user` ───────────────────
+    # --scope user registers the server globally across all projects for
+    # the current user. We remove-then-add rather than skip-if-present
+    # because `claude mcp add`'s idempotency is keyed on server NAME, not
+    # args — a stale registration pointing at a now-missing clauck binary
+    # (e.g., user moved /opt/homebrew/bin/clauck → ~/.local/bin/clauck)
+    # would make skip-if-present print "already registered" while
+    # `claude mcp list` returns connection failures forever. Re-running
+    # `clauck mcp --install` must always converge the state with what we
+    # just printed to the user.
+    claude_bin_path = _shutil.which("claude")
+    if claude_bin_path:
+        # Best-effort remove. Non-fatal: ignore returncode. If the server
+        # isn't registered, remove errors cleanly; if some other registration
+        # exists, remove clears it so the add below fully overwrites.
+        try:
+            subprocess.run(
+                [claude_bin_path, "mcp", "remove", "clauck", "-s", "user"],
+                capture_output=True, text=True, timeout=10,
+            )
+        except (subprocess.SubprocessError, OSError):
+            pass
 
-    # Claude Code CLI
-    code_cfg = HOME / ".claude" / "settings.json"
-    try:
-        code_data = json.loads(code_cfg.read_text()) if code_cfg.exists() else {}
-    except (OSError, ValueError):
-        code_data = {}
-    servers = code_data.setdefault("mcpServers", {})
-    if servers.get("clauck") != entry:
-        servers["clauck"] = entry
-        code_cfg.parent.mkdir(parents=True, exist_ok=True)
-        code_cfg.write_text(json.dumps(code_data, indent=2) + "\n")
-        print(f"  Claude Code CLI: {code_cfg}")
-        installed_any = True
+        try:
+            result = subprocess.run(
+                [
+                    claude_bin_path, "mcp", "add",
+                    "--scope", "user",
+                    "clauck", clauck_bin, "mcp",
+                ],
+                capture_output=True, text=True, timeout=15,
+            )
+            if result.returncode == 0:
+                print(f"  Claude Code: registered clauck → {clauck_bin} mcp")
+            else:
+                # Print the full error — truncation can cut off the
+                # actionable part of a CLI diagnostic. The user is staring
+                # at the terminal anyway.
+                err = (result.stderr or result.stdout or "").strip()
+                print(f"  Claude Code: registration failed — {err}")
+                print("  (run manually: "
+                      f"claude mcp add --scope user clauck {clauck_bin} mcp)")
+        except (subprocess.SubprocessError, OSError) as exc:
+            print(f"  Claude Code: registration failed — {exc}")
     else:
-        print(f"  Claude Code CLI: already registered ({code_cfg})")
+        print("  Claude Code: `claude` CLI not on PATH; skipping")
+        print("  (install Claude Code or run manually: "
+              f"claude mcp add --scope user clauck {clauck_bin} mcp)")
 
-    if installed_any:
-        print()
-        print("  tools: list_jobs · get_status · fire_job · get_logs")
-        print("         inspect_job · pause_job · resume_job · marketplace_list")
+    # ── Claude Desktop: build .mcpb bundle + open it ─────────────────────
+    # The modern Claude Desktop MCP install flow is `open foo.mcpb`, which
+    # triggers the app's GUI install dialog. The user clicks Install and
+    # Claude Desktop handles registration. We can't bypass the confirmation
+    # (by design; the new flow is explicit, not automatic), so the best
+    # clauck can do is minimize friction: generate a per-install bundle
+    # with an absolute command path, invoke `open`, and tell the user
+    # what to expect.
+    version = VERSION_FILE.read_text().strip() if VERSION_FILE.exists() else "0.0.0"
+    # VERSION file may start with "v"; the manifest semver field expects a
+    # bare version. Strip a single leading 'v' if present.
+    if version.startswith("v"):
+        version = version[1:]
+    bundle_path = JOBS_DIR / "clauck.mcpb"
+    try:
+        _build_mcpb_bundle(clauck_bin, bundle_path, version)
+        print(f"  Claude Desktop: built bundle {bundle_path}")
+        try:
+            subprocess.run(
+                ["open", str(bundle_path)],
+                capture_output=True, text=True, timeout=10,
+            )
+            print("  (Claude Desktop should prompt you to install — click Install)")
+        except (subprocess.SubprocessError, OSError) as exc:
+            print(f"  (auto-open failed: {exc}; open manually: open {bundle_path})")
+    except OSError as exc:
+        print(f"  Claude Desktop: bundle build failed — {exc}")
+
+    print()
+    print("  tools: list_jobs · get_status · fire_job · get_logs")
+    print("         inspect_job · pause_job · resume_job · marketplace_list")
 
 
 def cmd_mcp() -> None:

@@ -48,6 +48,7 @@ FILES=(
     "$HOME/.clauck/uninstall.sh"
     "$HOME/.clauck/.version"
     "$HOME/.clauck/prompt.md"
+    "$HOME/.clauck/clauck.mcpb"
     "$HOME/.claude/hooks/scheduled-jobs-notice.sh"
     "$HOME/.claude/skills/clauck/SKILL.md"
     "$HOME/.local/bin/clauck"
@@ -58,6 +59,19 @@ for f in "${FILES[@]}"; do
         ok "removed: $f"
     fi
 done
+
+# Unregister the Claude Code MCP entry (written by `clauck mcp --install`).
+# Symmetric cleanup: without this, `claude mcp list` retains a stale
+# `clauck` entry pointing at a now-deleted binary, producing "Failed to
+# connect" noise in every future Claude Code session. Best-effort; a
+# missing `claude` CLI or absent registration is not a fatal uninstall error.
+if command -v claude >/dev/null 2>&1; then
+    if claude mcp get clauck >/dev/null 2>&1; then
+        if claude mcp remove clauck -s user >/dev/null 2>&1; then
+            ok "unregistered clauck from Claude Code (user scope)"
+        fi
+    fi
+fi
 # Marketplace dir (cached copy of the curated job catalog).
 if [ -d "$HOME/.claude/skills/clauck/marketplace" ]; then
     rm -rf "$HOME/.claude/skills/clauck/marketplace"
