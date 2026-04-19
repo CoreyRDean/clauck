@@ -12,7 +12,7 @@
 <!-- AGENT: If you're an AI agent, read CLAUDE.md first — it's your primary reference.
      https://raw.githubusercontent.com/CoreyRDean/clauck/main/CLAUDE.md -->
 
-**clauck is a local agent runtime for macOS.** Schedule agent work, react to events, chain pipelines, and build automations that think — all from plain English. Runs as you, on your Mac, with your permissions. No cloud. No sandbox. No permission-gated runtime.
+**clauck is a local agent runtime for macOS.** Build **Clauck Cycles** — think "clock cycles" — agents that execute on schedules, react to events, chain through pipelines, and automate work that thinks. All from plain English. Runs as you, on your Mac, with your permissions. No cloud. No sandbox. No permission-gated runtime.
 
 The contract that governs this project lives in [INTENT.md](INTENT.md).
 
@@ -78,7 +78,7 @@ Build pipelines where jobs produce data for other jobs. React to filesystem chan
 | Temporal scheduling (one-shot, decay, windows) | One-shot only | Full set |
 | Per-job model/budget/MCP control | Partial | Per-job frontmatter |
 | Interactive debug + iterate | No | Opens Terminal to continue |
-| Job marketplace + community | No | 7+ curated, extensible |
+| Cycle marketplace + community | No | 7+ curated, extensible |
 | Self-healing diagnostics | No | `clauck doctor` |
 | CLI management | No | `clauck` binary with semantic fallthrough |
 | Works without Desktop app | Cloud only (no local) | launchd (OS-level) |
@@ -137,11 +137,11 @@ clauck work <text>                   # explicit semantic (avoids subcommand conf
 
 The semantic fallthrough means `clauck change heartbeat to every 2 hours` works the same as opening Claude and asking — but faster.
 
-## Job marketplace
+## Cycle marketplace
 
-Ships with 7 curated jobs. Ask Claude *"what's in the marketplace?"* or run `clauck marketplace`:
+Ships with 7 curated Cycles. Ask Claude *"what's in the marketplace?"* or run `clauck marketplace`:
 
-| Job | Schedule | Cost/mo | What it does |
+| Cycle | Schedule | Cost/mo | What it does |
 |---|---|---|---|
 | **morning-brief** | Weekdays 8am | ~$4 | Slack mentions + calendar + Jira in one digest |
 | **github-pr-digest** | Weekdays 9am | ~$3 | PRs needing review, stale drafts, merged |
