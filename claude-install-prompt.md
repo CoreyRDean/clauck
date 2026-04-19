@@ -21,7 +21,9 @@ and report cleanly.
      system to future Claude Code sessions.
    - The `/clauck:clauck` skill (also shipped by the plugin) is how they
      manage it going forward. Invoke it in any CC session.
-   - Desktop users: manual plugin install per `docs/desktop-plugin-setup.md`.
+   - **If they also use Claude Desktop**: they can integrate it there by
+     pasting *"Create a new CoWork plugin from https://github.com/CoreyRDean/clauck"*
+     into any Desktop chat. Desktop handles plugin creation natively.
 
 3. If the installer exits non-zero, diagnose:
    - Check the printed error for the specific step that failed.

@@ -32,23 +32,50 @@ If you're running in a non-CLI harness: be upfront with the user about what you 
 
 ## If a user asks you to install clauck
 
-### Claude Code (CLI) — one command
+**Detect your harness first**, then pick the matching path. The user's goal is "Hey Claude, install clauck" — the minimum effort experience — and that only works if the agent routes correctly based on where it's running.
 
-1. **Verify you're in a Claude Code CLI session** (not Desktop, not Cloud). If not, see the Desktop flow below.
-2. Run: `curl -sSL https://raw.githubusercontent.com/CoreyRDean/clauck/main/install.sh | bash`
-3. The installer handles everything: runtime placement, LaunchAgent, job marketplace cache, heartbeat verification, **AND** registers the clauck plugin with Claude Code (`claude plugin marketplace add CoreyRDean/clauck` + `claude plugin install clauck@clauck --scope user`). The plugin delivers the skill (`/clauck:clauck`), the SessionStart hook, and the MCP server.
-4. After install, invoke the skill in any CC session: `/clauck:clauck` — it's the full operational playbook.
-5. Browse the job marketplace: `cat ~/.claude/skills/clauck/marketplace/index.json | python3 -m json.tool`
-6. Help the user pick and customize jobs, or design new ones from their intent.
+### If you're running in Claude Code (CLI)
 
-### Claude Desktop — manual plugin setup
+Run the runtime installer. It bootstraps everything including the Claude Code plugin registration.
 
-Desktop has no `/plugin` CLI, so install has two steps:
+```bash
+curl -sSL https://raw.githubusercontent.com/CoreyRDean/clauck/main/install.sh | bash
+```
 
-1. User runs the install.sh above to place the runtime (scheduler, LaunchAgent, `~/.local/bin/clauck`). This is a no-op for the plugin side on Desktop — only the runtime lands.
-2. User follows `docs/desktop-plugin-setup.md` to add the marketplace and install the plugin via Desktop's Customize → Personal plugins UI (12 steps). The plugin's SessionStart hook then self-heals any version drift on subsequent sessions.
+The installer places the scheduler, LaunchAgent, CLI at `~/.local/bin/clauck`, job-marketplace cache, **and** runs `claude plugin marketplace add CoreyRDean/clauck` + `claude plugin install clauck@clauck --scope user`. Plugin delivers skill (`/clauck:clauck`), SessionStart hook, and MCP server. Heartbeat fires at the end as proof.
 
-Point users at `docs/desktop-plugin-setup.md` for the step-by-step.
+After install, invoke `/clauck:clauck` for the operational playbook, or ask the user what they want to schedule.
+
+### If you're running in Claude Desktop (CoWork or chat)
+
+Two things, in order:
+
+1. **Create the plugin yourself, right now.** Claude Desktop has a native capability to build a CoWork plugin from a repo URL. Don't walk the user through UI clicks; don't paste the 12-step marketplace flow. Just do:
+
+   > Create a new CoWork plugin from `https://github.com/CoreyRDean/clauck`.
+
+   That single instruction is all Desktop needs. Executing it (or producing exactly that instruction for the user if your tool surface can't do it directly) creates the plugin with the skill, hook, and MCP server wired.
+
+2. **Tell the user they still need the runtime binary on their Mac.** The plugin wraps an installed binary; it doesn't ship one. Ask them to run the curl install.sh one-liner in a terminal. If they've never installed clauck before, this is required — the MCP server will fail to start without it. If they already have it installed, this step is a no-op.
+
+   ```bash
+   curl -sSL https://raw.githubusercontent.com/CoreyRDean/clauck/main/install.sh | bash
+   ```
+
+   Once the runtime is present, the plugin's SessionStart hook self-heals any future version drift without intervention.
+
+### If you're running somewhere else (Cloud, unknown harness, no Bash)
+
+You can't install clauck directly — clauck needs a persistent scheduler on the user's Mac, which requires local Bash + launchd access. Do this instead:
+
+1. Tell the user clauck is macOS-only and requires installation on their Mac.
+2. Give them the one-liner to run in their Mac's terminal:
+
+   ```bash
+   curl -sSL https://raw.githubusercontent.com/CoreyRDean/clauck/main/install.sh | bash
+   ```
+
+3. If they also use Claude Desktop and want it integrated there, they can paste *"Create a new CoWork plugin from https://github.com/CoreyRDean/clauck"* to any Desktop chat after running the installer.
 
 ### How the two sides stay in sync
 
