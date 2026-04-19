@@ -85,11 +85,13 @@ Build pipelines where jobs produce data for other jobs. React to filesystem chan
 
 ## Install
 
+### Claude Code
+
 ```bash
 curl -sSL https://raw.githubusercontent.com/CoreyRDean/clauck/main/install.sh | bash
 ```
 
-The installer shows you exactly what it will do and asks before proceeding. It installs the scheduler, skill, marketplace, CLI, and a SessionStart hook — then fires the heartbeat job and shows proof the pipeline works.
+One command. The installer places the runtime (scheduler, LaunchAgent, CLI at `~/.local/bin/clauck`), caches the job marketplace, **and registers the clauck plugin with Claude Code** — the plugin delivers the skill (`/clauck:clauck`), the SessionStart hook, and the MCP server in one shot. Fires the heartbeat job at the end as proof.
 
 **Inspect first:** `curl -fsSL .../install.sh -o install.sh && less install.sh && bash install.sh`
 
@@ -98,6 +100,13 @@ The installer shows you exactly what it will do and asks before proceeding. It i
 **Non-interactive:** `curl ... | bash -s -- --yes`
 
 **Just tell Claude:** paste *"Hey Claude, install clauck"* into any Claude Code session.
+
+### Claude Desktop
+
+Desktop has no `/plugin` CLI, so install is a two-step:
+
+1. Run the install.sh above. It places the runtime and binary. On Desktop, the plugin-registration step is skipped automatically (no `claude` CLI available in that context).
+2. Follow [docs/desktop-plugin-setup.md](docs/desktop-plugin-setup.md) — 12 manual steps in Customize → Personal plugins to add the marketplace and install the plugin. Takes ~45 seconds. The plugin's SessionStart hook self-heals runtime drift on subsequent sessions.
 
 ### Prerequisites
 

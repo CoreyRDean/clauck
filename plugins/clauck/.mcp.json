@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "clauck": {
+      "command": "clauck",
+      "args": ["mcp"]
+    }
+  }
+}

@@ -193,32 +193,37 @@ Each notification shows the job name, success/failure, and cost if available —
 
 The notification fires after the claude session exits, regardless of success or failure. It is emitted via `osascript` and requires no additional software. Silent (no banner) if the user has disabled notifications for Terminal in macOS System Settings → Notifications.
 
-## MCP server (Claude Desktop + Claude Code integration)
+## MCP server + skill + hook (via the clauck plugin)
 
-clauck ships a stdio MCP server that exposes job management as tools for any MCP-capable client (Claude Desktop, Claude Code, etc.).
+Three Claude-facing surfaces ship inside the **clauck plugin** (a Claude Code plugin marketplace at `CoreyRDean/clauck`):
 
-**Enable once** (run by `install.sh` automatically; re-run any time to refresh):
+- **MCP server**: `clauck` — exposes job management as MCP tools.
+- **Skill**: `/clauck:clauck` — this document, loaded on demand.
+- **SessionStart hook**: emits the `<scheduled-jobs-system>` block at the top of every CC session, listing installed jobs + semantic_hooks. Also self-heals runtime drift by backgrounding `install.sh` if the `clauck` binary is missing or version-mismatched.
 
+### Claude Code install
+
+`install.sh` registers the plugin automatically:
+
+```bash
+claude plugin marketplace add CoreyRDean/clauck      # idempotent — skips if present
+claude plugin install clauck@clauck --scope user     # idempotent — reconciles version drift
 ```
-clauck mcp --install
-```
 
-What that does:
-
-- **Claude Code** — runs `claude mcp add --scope user clauck <clauck-bin> mcp` so the server appears in `claude mcp list` globally across projects. Idempotent (`claude mcp get clauck` is checked first).
-- **Claude Desktop** — builds a minimal `.mcpb` bundle at `~/.clauck/clauck.mcpb` (manifest points at the installed clauck binary) and runs `open` on it, triggering Claude Desktop's install dialog. **Click Install in the dialog to register.** Claude Desktop's new architecture requires explicit user confirmation — clauck cannot bypass it. Re-running `clauck mcp --install` rebuilds and re-opens the bundle.
-- **Cleanup** — removes any stale `mcpServers.clauck` entries from the legacy config files (`~/.claude/settings.json`, `~/Library/Application Support/Claude/claude_desktop_config.json`) so old clauck installs don't leave ghost registrations.
-
-**Opt out:** `clauck config set no_mcp_install true` or pass `--no-mcp` to `install.sh`. Persisted in `~/.clauck/.clauck.config.json`.
+To register manually (or re-register after `--no-mcp`), run those two commands yourself.
 
 **Verify registration:**
 
 ```bash
-claude mcp list | grep clauck            # Claude Code: should list `clauck`
-ls ~/.clauck/clauck.mcpb                  # Claude Desktop: bundle exists
+claude plugin list                        # should include clauck
+claude plugin marketplace list            # should include CoreyRDean/clauck
 ```
 
-If Claude Desktop's dialog didn't appear, re-open the bundle manually: `open ~/.clauck/clauck.mcpb`.
+### Claude Desktop install
+
+Desktop has no `/plugin` CLI. The 12-step Customize → Personal plugins walkthrough is in `docs/desktop-plugin-setup.md`. The plugin's SessionStart hook self-heals any runtime drift on subsequent Desktop sessions, same as on Claude Code.
+
+**Opt out:** `clauck config set no_mcp_install true` or pass `--no-mcp` to `install.sh`. Persisted in `~/.clauck/.clauck.config.json`. The flag still reads `no_mcp_install` for compatibility with existing configs — it gates plugin registration now, not direct MCP config writes.
 
 **Available tools:**
 
@@ -760,7 +765,7 @@ Or use the one-liner from the README:
 curl -sSL https://raw.githubusercontent.com/CoreyRDean/clauck/main/install.sh | bash
 ```
 
-The installer places scripts in `~/.clauck/`, the skill in `~/.claude/skills/clauck/`, the hook in `~/.claude/hooks/`, and the LaunchAgent in `~/Library/LaunchAgents/`. After install, consider editing `~/.clauck-prompt.md` to add environment-specific durable-state guidance if useful for your jobs.
+The installer places the runtime scripts in `~/.clauck/`, the `clauck` CLI in `~/.local/bin/clauck`, the LaunchAgent in `~/Library/LaunchAgents/`, and the pre-made-job catalog in `~/.claude/skills/clauck/marketplace/`. The skill, SessionStart hook, and MCP server are delivered via the clauck plugin (`CoreyRDean/clauck` marketplace) — the installer registers it with `claude plugin install` on Claude Code; Desktop users follow `docs/desktop-plugin-setup.md` manually. After install, consider editing `~/.clauck/prompt.md` to add environment-specific durable-state guidance if useful for your jobs.
 
 ### Step 3: Install the LaunchAgent
 
@@ -1178,28 +1183,14 @@ Other agent sessions (interactive Claude Code, different long-running sessions, 
 
 ### Making agents aware of this system at session start (no CLAUDE.md pollution)
 
-The cleanest way to advertise scheduled-job hooks to every agent session without adding content to `~/.claude/CLAUDE.md` (which some users rewrite regularly) is a **SessionStart hook** in `~/.claude/settings.json`. The hook runs a shell script whose stdout is injected into the agent's context at session start.
+The cleanest way to advertise scheduled-job hooks to every agent session without adding content to `~/.claude/CLAUDE.md` is a **SessionStart hook**, and clauck ships one inside the plugin at `plugins/clauck/hooks/sessionstart.sh`. The plugin's `hooks/hooks.json` registers it with Claude Code automatically; no direct `~/.claude/settings.json` editing is involved. The hook's stdout is injected into the agent's context at session start.
 
-The installer registers a hook script at `~/.claude/hooks/scheduled-jobs-notice.sh` and adds it to `~/.claude/settings.json`. The registered entry looks like:
+The script does two things:
 
-```json
-{
-  "hooks": {
-    "SessionStart": [
-      {
-        "matcher": "startup",
-        "hooks": [
-          { "type": "command", "command": "bash /Users/<username>/.claude/hooks/scheduled-jobs-notice.sh" }
-        ]
-      }
-    ]
-  }
-}
-```
+1. **Drift reconciliation.** Checks whether the clauck binary exists at `~/.local/bin/clauck` and whether its version matches the plugin's version. If either fails, backgrounds `install.sh` via `nohup` (non-blocking) and prints a one-line notice. The session proceeds; the reconciled state lands in the next session.
+2. **Scheduled-jobs notice.** Reads `~/.clauck/.manifest.json` and emits the `<scheduled-jobs-system>` block with every job's `semantic_hooks`, inputs, and example `trigger_command` invocation.
 
-The notice script silently no-ops if the scheduled-jobs system isn't installed, so it's safe to ship in a portable `settings.json`. It counts jobs from the manifest and emits a compact `<scheduled-jobs-system>` block telling the agent where to look.
-
-Since `settings.json` is separate from `CLAUDE.md`, it survives CLAUDE.md rewrites.
+Because the hook is plugin-delivered, it lives or dies with the plugin itself — uninstalling the plugin cleanly removes the hook; there's no `settings.json` drift to clean up later.
 
 ### Concurrency protection is automatic
 
