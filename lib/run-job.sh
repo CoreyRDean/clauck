@@ -146,6 +146,35 @@ echo $$ > "$LOCK_DIR/pid"
 trap 'rm -rf "$LOCK_DIR"' EXIT
 date +%s > "$LAST_START_FILE"
 
+# --- Revive override: consume session/budget overrides written by `clauck revive` ---
+# The file is single-use: read once, deleted immediately after the lock is held.
+# This overrides MAX_TURNS and MAX_BUDGET_USD from the job frontmatter and injects
+# --resume <session_id> so claude picks up the tripped session non-interactively.
+REVIVE_SESSION_ID=""
+REVIVE_CONSUMERS=""
+REVIVE_FILE="$STATE_DIR/${JOB_NAME}.revive.json"
+if [ -f "$REVIVE_FILE" ]; then
+  _REVIVE_DATA="$(/usr/bin/python3 -c "
+import json, sys
+try:
+    d = json.load(open(sys.argv[1]))
+    print(d.get('session_id', ''))
+    print(d.get('max_budget_usd', ''))
+    print(d.get('max_turns', ''))
+    print(' '.join(str(c) for c in d.get('consumers', [])))
+except Exception:
+    print(''); print(''); print(''); print('')
+" "$REVIVE_FILE" 2>/dev/null || true)"
+  rm -f "$REVIVE_FILE"
+  REVIVE_SESSION_ID="$(printf '%s\n' "$_REVIVE_DATA" | sed -n '1p')"
+  _REVIVE_BUDGET="$(printf '%s\n' "$_REVIVE_DATA" | sed -n '2p')"
+  _REVIVE_TURNS="$(printf '%s\n' "$_REVIVE_DATA" | sed -n '3p')"
+  REVIVE_CONSUMERS="$(printf '%s\n' "$_REVIVE_DATA" | sed -n '4p')"
+  [ -n "$_REVIVE_BUDGET" ] && MAX_BUDGET_USD="$_REVIVE_BUDGET"
+  [ -n "$_REVIVE_TURNS" ]  && MAX_TURNS="$_REVIVE_TURNS"
+  echo "stage=revive_override session_id=$REVIVE_SESSION_ID max_budget_usd=$MAX_BUDGET_USD max_turns=$MAX_TURNS consumers=$REVIVE_CONSUMERS" >> "$LOG_FILE"
+fi
+
 [ -f "$PROMPT_FILE" ]   || die "prompt file not found: $PROMPT_FILE" 3
 [ -f "$GLOBAL_PROMPT" ] || die "global prompt not found: $GLOBAL_PROMPT" 4
 
@@ -436,6 +465,9 @@ if [ "${CLAUDE_JOB_STRICT_MCP_CONFIG:-}" = "1" ]; then
   CLAUDE_ARGS+=(--strict-mcp-config --mcp-config "$EMPTY_MCP_CONFIG")
 fi
 
+# --- Revive: inject --resume to continue the tripped session non-interactively ---
+[ -n "${REVIVE_SESSION_ID:-}" ] && CLAUDE_ARGS+=(--resume "$REVIVE_SESSION_ID")
+
 # --- Session persistence: reuse the same session across runs ---
 # On first run, we capture session_id from the JSON output and store it.
 # On subsequent runs, we pass --resume <session_id> so claude has context
@@ -507,6 +539,89 @@ if [ "${CLAUDE_JOB_INTERACTIVE:-}" = "1" ] && [ "$EXIT_CODE" -eq 0 ]; then
 fi
 
 echo "--- exit_code=$EXIT_CODE ===" >> "$LOG_FILE"
+
+# --- Revive: trigger downstream consumers when the revived job completes successfully ---
+# For pipeline nodes, this chains the pipeline forward without re-running producers.
+# Consumers with their own `producers:` declarations will re-run those stages; consumers
+# without producer dependencies fire directly. This covers the common case (root→leaf pipelines).
+if [ "$EXIT_CODE" -eq 0 ] && [ -n "${REVIVE_CONSUMERS:-}" ]; then
+  for _CONSUMER in ${=REVIVE_CONSUMERS}; do
+    echo "stage=revive_trigger_consumer job=$_CONSUMER" >> "$LOG_FILE"
+    CLAUDE_JOB_TRIGGER="revive-continuation" "$JOBS_DIR/trigger-job.sh" "$_CONSUMER" &
+  done
+fi
+
+# --- Circuit-breaker tombstone: capture session on budget/turn exhaustion ---
+# If the job tripped max_budget or max_turns, write a tombstone so the user can
+# revive the session with augmented limits via: clauck revive <name>
+if [ "$EXIT_CODE" -ne 0 ]; then
+  /usr/bin/python3 - \
+      "${JOB_NAME}" "${LOG_FILE}" "${JOBS_DIR}/.broken" \
+      "${MAX_TURNS:-50}" "${MAX_BUDGET_USD:-2.0}" \
+      "${CLAUDE_DAG_INVOCATION_ID:-}" "${CLAUDE_DAG_ROOT:-}" << 'PYEOF_BROKEN' 2>/dev/null || true
+import json, os, sys
+from datetime import datetime, timezone
+
+job_name   = sys.argv[1] if len(sys.argv) > 1 else "?"
+log_file   = sys.argv[2] if len(sys.argv) > 2 else ""
+broken_dir = sys.argv[3] if len(sys.argv) > 3 else ""
+orig_turns = int(sys.argv[4]) if len(sys.argv) > 4 else 50
+orig_budget = float(sys.argv[5]) if len(sys.argv) > 5 else 2.0
+dag_invocation_id = sys.argv[6] if len(sys.argv) > 6 else ""
+dag_root          = sys.argv[7] if len(sys.argv) > 7 else ""
+
+TRIP_REASONS = {"max_turns", "max_budget", "budget_exceeded"}
+
+if not log_file or not broken_dir:
+    sys.exit(0)
+
+envelope = None
+try:
+    for line in reversed(open(log_file).read().splitlines()):
+        try:
+            obj = json.loads(line)
+            if "terminal_reason" in obj or "session_id" in obj:
+                envelope = obj
+                break
+        except Exception:
+            pass
+except Exception:
+    sys.exit(0)
+
+if not envelope:
+    sys.exit(0)
+
+terminal_reason = envelope.get("terminal_reason", "")
+if terminal_reason not in TRIP_REASONS:
+    sys.exit(0)
+
+session_id = envelope.get("session_id", "")
+spend = envelope.get("total_cost_usd") or envelope.get("cost_usd")
+
+os.makedirs(broken_dir, exist_ok=True)
+ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+tombstone_path = os.path.join(broken_dir, f"{job_name}-{ts}.json")
+tombstone = {
+    "job": job_name,
+    "ts": datetime.now(timezone.utc).isoformat(),
+    "log": log_file,
+    "session_id": session_id,
+    "trip_reason": terminal_reason,
+    "orig_max_turns": orig_turns,
+    "orig_max_budget_usd": orig_budget,
+    "spend_usd": spend,
+}
+# DAG context (present only when tripped inside a pipeline run).
+# Enables `clauck revive` to resume the full DAG from the tripped node via
+# `dag-runner.py --resume <invocation_id>` rather than just re-running the
+# single node and losing upstream promise delivery.
+if dag_invocation_id:
+    tombstone["dag_invocation_id"] = dag_invocation_id
+    tombstone["dag_root"] = dag_root
+with open(tombstone_path, "w") as f:
+    json.dump(tombstone, f, indent=2)
+PYEOF_BROKEN
+fi
 
 # --- macOS push notification (opt-in via: clauck config set notifications true) ---
 /usr/bin/python3 - "${JOB_NAME}" "${EXIT_CODE}" "${LOG_FILE}" "${JOBS_DIR}/.clauck.config.json" << 'PYEOF' 2>/dev/null || true

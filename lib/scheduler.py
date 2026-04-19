@@ -1012,10 +1012,31 @@ def maybe_check_for_updates() -> None:
 # ---------- main ----------
 
 
+def _cleanup_stale_tombstones(retention_hours: int = 72) -> None:
+    """Remove tombstones and expired DAG invocation state after retention_hours.
+
+    Tombstones live in ~/.clauck/.broken/; DAG invocation state (used by
+    `clauck revive` to drive true mid-DAG resume) lives in
+    ~/.clauck/.state/.dag-invocations/. Both share the same TTL so an expired
+    tombstone and its matching invocation state get reaped in lockstep.
+    """
+    cutoff = datetime.now().timestamp() - retention_hours * 3600
+    for sub in (JOBS_DIR / ".broken", JOBS_DIR / ".state" / ".dag-invocations"):
+        if not sub.exists():
+            continue
+        for p in sub.glob("*.json"):
+            try:
+                if p.stat().st_mtime < cutoff:
+                    p.unlink()
+            except OSError:
+                pass
+
+
 def tick() -> None:
     jobs = discover_jobs()
     write_manifest(jobs)
     maybe_check_for_updates()
+    _cleanup_stale_tombstones()
     now = datetime.now()
     minute_start = int(now.replace(second=0, microsecond=0).timestamp())
 
