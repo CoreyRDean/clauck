@@ -32,12 +32,30 @@ If you're running in a non-CLI harness: be upfront with the user about what you 
 
 ## If a user asks you to install clauck
 
-1. **Verify you're in a Claude Code CLI session** (not Desktop, not Cloud). If not, explain the limitation.
+### Claude Code (CLI) — one command
+
+1. **Verify you're in a Claude Code CLI session** (not Desktop, not Cloud). If not, see the Desktop flow below.
 2. Run: `curl -sSL https://raw.githubusercontent.com/CoreyRDean/clauck/main/install.sh | bash`
-3. The installer handles everything: preflight, file placement, LaunchAgent, settings.json hook, marketplace, verification via heartbeat fire.
-4. After install, read `~/.claude/skills/clauck/SKILL.md` — it's the full operational playbook.
-5. Browse the marketplace: `cat ~/.claude/skills/clauck/marketplace/index.json | python3 -m json.tool`
+3. The installer handles everything: runtime placement, LaunchAgent, job marketplace cache, heartbeat verification, **AND** registers the clauck plugin with Claude Code (`claude plugin marketplace add CoreyRDean/clauck` + `claude plugin install clauck@clauck --scope user`). The plugin delivers the skill (`/clauck:clauck`), the SessionStart hook, and the MCP server.
+4. After install, invoke the skill in any CC session: `/clauck:clauck` — it's the full operational playbook.
+5. Browse the job marketplace: `cat ~/.claude/skills/clauck/marketplace/index.json | python3 -m json.tool`
 6. Help the user pick and customize jobs, or design new ones from their intent.
+
+### Claude Desktop — manual plugin setup
+
+Desktop has no `/plugin` CLI, so install has two steps:
+
+1. User runs the install.sh above to place the runtime (scheduler, LaunchAgent, `~/.local/bin/clauck`). This is a no-op for the plugin side on Desktop — only the runtime lands.
+2. User follows `docs/desktop-plugin-setup.md` to add the marketplace and install the plugin via Desktop's Customize → Personal plugins UI (12 steps). The plugin's SessionStart hook then self-heals any version drift on subsequent sessions.
+
+Point users at `docs/desktop-plugin-setup.md` for the step-by-step.
+
+### How the two sides stay in sync
+
+- Plugin and runtime versions are coupled via the same `VERSION` file in this repo, so release tags produce matched plugin+runtime versions.
+- Runtime update (user re-runs install.sh) → install.sh detects plugin version drift and runs `claude plugin update clauck`.
+- Plugin update (CC auto-fetches from marketplace) → SessionStart hook detects runtime drift on next session and backgrounds `install.sh` via `nohup`.
+- Either direction converges; both no-op if already in sync.
 
 ## If you're working on this repo (contributing)
 
@@ -71,7 +89,12 @@ launchd (60s tick) → scheduler.py
    bash -n install.sh && bash -n uninstall.sh
    /usr/bin/python3 -c "import ast; ast.parse(open('lib/scheduler.py').read())"
    /usr/bin/python3 -c "import ast; ast.parse(open('lib/dag-runner.py').read())"
+   /usr/bin/python3 -c "import ast; ast.parse(open('lib/clauck').read())"
+   /usr/bin/python3 -c "import ast; ast.parse(open('lib/sizing.py').read())"
    /usr/bin/python3 -c "import json; json.load(open('marketplace/index.json'))"
+   claude plugin validate ./plugins/clauck
+   claude plugin validate ./.claude-plugin/marketplace.json
+   bash -n plugins/clauck/hooks/sessionstart.sh
    bash install.sh --dry-run --yes
    ```
 
@@ -88,9 +111,11 @@ launchd (60s tick) → scheduler.py
 | Config | `~/.clauck/.clauck.config.json` |
 | Version | `~/.clauck/.version` |
 | Build source | `~/.clauck/.build-source` (channel, source, git SHA) |
-| Skill | `~/.claude/skills/clauck/SKILL.md` |
-| Marketplace | `~/.claude/skills/clauck/marketplace/` |
-| Hook | `~/.claude/hooks/scheduled-jobs-notice.sh` |
+| Plugin source (in repo) | `plugins/clauck/` — manifest, skill, hooks, `.mcp.json` |
+| Plugin (installed by CC) | managed by `claude plugin install`; path is CC-internal |
+| Skill | `plugins/clauck/skills/clauck/SKILL.md` (source); delivered to CC via the plugin, loaded on demand as `/clauck:clauck` |
+| SessionStart hook | `plugins/clauck/hooks/sessionstart.sh` (source); delivered via the plugin |
+| Job marketplace | `~/.claude/skills/clauck/marketplace/` (pre-made job catalog — separate from the Claude plugin marketplace) |
 | CLI | `~/.local/bin/clauck` |
 | LaunchAgent | `~/Library/LaunchAgents/com.$USER.claude-scheduler.plist` |
 | Global prompt | `~/.clauck/prompt.md` |

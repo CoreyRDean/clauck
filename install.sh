@@ -59,10 +59,10 @@ Usage: install.sh [--dry-run] [--yes] [--channel=stable|nightly|local] [--no-mcp
   --channel=<name>   Update channel: stable (default), nightly, or local.
                      When installing from a local checkout, defaults to "local"
                      unless this flag is explicitly set.
-  --no-mcp           Skip auto-registering the MCP server in Claude Desktop and
-                     Claude Code. Persisted in config; use 'clauck mcp --install'
-                     to register manually later.
-
+  --no-mcp           Skip auto-registering the clauck plugin with Claude Code
+                     (covers skill, hook, and MCP server). Persisted in config;
+                     add manually later with:
+                       claude plugin marketplace add CoreyRDean/clauck
 Environment variables:
   CLAUCK_REPO     Git clone URL (default: $REPO_URL)
   CLAUCK_BRANCH   Branch or tag to install (default: main)
@@ -322,7 +322,10 @@ install_files() {
     install_file "$repo/lib/dag-runner.py"            "$HOME/.clauck/dag-runner.py"  755
     install_file "$repo/lib/clauck-mcp"               "$HOME/.clauck/clauck-mcp"     755
     install_file "$repo/lib/prompt.md"                "$HOME/.clauck/prompt.md"      644
-    install_file "$repo/lib/scheduled-jobs-notice.sh" "$HOME/.claude/hooks/scheduled-jobs-notice.sh" 755
+    # The SessionStart hook and SKILL.md used to be placed directly into
+    # ~/.claude/ by this installer. They now ship as part of the plugin
+    # (plugins/clauck/hooks/ and plugins/clauck/skills/) and are installed
+    # via `claude plugin install clauck@clauck` in install_plugin() below.
     # Ship uninstall.sh alongside the runtime so `clauck uninstall` always has
     # a local, version-matched copy to invoke. Running the remote latest
     # against an older local install can leave orphaned files behind.
@@ -435,11 +438,23 @@ CFGEOF
     section "Installing skill"
     # Clean up old skill dir name if upgrading from pre-v1.2
     [ -d "$HOME/.claude/skills/scheduled-jobs" ] && rm -rf "$HOME/.claude/skills/scheduled-jobs" && ok "migrated old skill dir"
+    # SKILL.md used to live at ~/.claude/skills/clauck/SKILL.md (populated by
+    # this installer). It now ships inside the plugin and is installed via
+    # `claude plugin install clauck@clauck`. We still own ~/.claude/skills/clauck/
+    # for the job-marketplace cache below (the clauck CLI and the skill text
+    # reference that path), so we keep the directory but no longer write
+    # SKILL.md into it directly.
     run mkdir -p "$HOME/.claude/skills/clauck"
-    install_file "$repo/skill/clauck/SKILL.md" "$HOME/.claude/skills/clauck/SKILL.md" 644
+    # If a previous clauck version put SKILL.md here, remove it so it doesn't
+    # shadow the plugin's version after upgrade.
+    if [ -f "$HOME/.claude/skills/clauck/SKILL.md" ]; then
+        rm -f "$HOME/.claude/skills/clauck/SKILL.md"
+        ok "migrated SKILL.md ownership to plugin (removed legacy copy)"
+    fi
 
-    # Ship the marketplace (pre-made job catalog) into the skill dir so agents can
-    # browse it offline. Always overwrite — marketplace updates are expected.
+    # Ship the job marketplace (pre-made job catalog) so the clauck CLI and
+    # the plugin's skill text can read it offline. This is separate from the
+    # Claude plugin marketplace — this is the clauck-native job catalog.
     if [ -d "$repo/marketplace" ]; then
         local mkt_dst="$HOME/.claude/skills/clauck/marketplace"
         rm -rf "$mkt_dst"
@@ -503,70 +518,105 @@ EOF
 }
 
 # ──────────────────────────────────────────────────────────────────────────
-# settings.json — register SessionStart hook idempotently
+# Legacy cleanup: remove pre-plugin SessionStart hook entries
 # ──────────────────────────────────────────────────────────────────────────
+#
+# Prior installs wrote a clauck SessionStart hook directly into
+# ~/.claude/settings.json pointing at ~/.claude/hooks/scheduled-jobs-notice.sh.
+# That file is gone now (the hook ships inside the plugin), so the registration
+# would dangle. We strip any entry whose `command` includes "scheduled-jobs-notice.sh"
+# to avoid a broken startup hook on upgrade.
 
-patch_settings() {
-    section "Registering SessionStart hook in ~/.claude/settings.json"
-
+strip_legacy_hook() {
     local settings="$HOME/.claude/settings.json"
-    local hook_cmd="bash $HOME/.claude/hooks/scheduled-jobs-notice.sh"
-
-    /usr/bin/python3 - "$settings" "$hook_cmd" <<'EOF'
-import json, sys, pathlib
-
+    [ -f "$settings" ] || return 0
+    /usr/bin/python3 - "$settings" <<'EOF' || true
+import json, pathlib, sys
 path = pathlib.Path(sys.argv[1])
-cmd  = sys.argv[2]
-
-data = {}
-if path.exists():
-    try:
-        data = json.loads(path.read_text())
-    except Exception as e:
-        print(f"  ! existing settings.json could not be parsed ({e}); refusing to overwrite", file=sys.stderr)
-        sys.exit(2)
-
-hooks = data.setdefault("hooks", {})
-session_start = hooks.setdefault("SessionStart", [])
-
-# Find or create the "startup" matcher block.
-startup_block = None
-for block in session_start:
-    if isinstance(block, dict) and block.get("matcher") == "startup":
-        startup_block = block
-        break
-if startup_block is None:
-    startup_block = {"matcher": "startup", "hooks": []}
-    session_start.append(startup_block)
-
-# Check if our hook is already registered (by command string).
-existing = startup_block.setdefault("hooks", [])
-already = any(isinstance(h, dict) and h.get("command") == cmd for h in existing)
-if already:
-    print("  ✓ hook already registered; leaving untouched")
-else:
-    existing.append({"type": "command", "command": cmd})
+try:
+    data = json.loads(path.read_text())
+except Exception:
+    sys.exit(0)
+hooks = data.get("hooks", {}) or {}
+ss = hooks.get("SessionStart", []) or []
+changed = False
+kept_blocks = []
+for block in ss:
+    if not isinstance(block, dict):
+        kept_blocks.append(block)
+        continue
+    kept_hooks = []
+    for h in block.get("hooks", []) or []:
+        if isinstance(h, dict) and "scheduled-jobs-notice.sh" in str(h.get("command", "")):
+            changed = True
+            continue
+        kept_hooks.append(h)
+    if kept_hooks:
+        block["hooks"] = kept_hooks
+        kept_blocks.append(block)
+    else:
+        # entire block removed
+        changed = True
+if changed:
+    if kept_blocks:
+        hooks["SessionStart"] = kept_blocks
+    else:
+        hooks.pop("SessionStart", None)
+    if not hooks:
+        data.pop("hooks", None)
+    else:
+        data["hooks"] = hooks
     path.write_text(json.dumps(data, indent=2) + "\n")
-    print(f"  ✓ registered SessionStart hook → {cmd}")
+    print("  ✓ removed legacy SessionStart hook (plugin provides it now)")
 EOF
 }
 
-# ──────────────────────────────────────────────────────────────────────────
-# MCP server registration (Claude Desktop + Claude Code)
-# ──────────────────────────────────────────────────────────────────────────
+# Remove the legacy hook script itself (its logic moved into the plugin).
+strip_legacy_hook_file() {
+    local hook_file="$HOME/.claude/hooks/scheduled-jobs-notice.sh"
+    if [ -f "$hook_file" ]; then
+        rm -f "$hook_file"
+        ok "removed legacy hook: $hook_file"
+    fi
+}
 
-install_mcp() {
-    section "Registering MCP server"
+# ──────────────────────────────────────────────────────────────────────────
+# Plugin registration (Claude Code marketplace + install)
+# ──────────────────────────────────────────────────────────────────────────
+#
+# The clauck plugin is the canonical path for registering the MCP server,
+# skill, and SessionStart hook with Claude Code. Desktop is manual — see
+# docs/desktop-plugin-setup.md for the walkthrough.
+#
+# All operations are idempotent. We query plugin state via
+# `claude plugin list --json` and `claude plugin marketplace list --json`
+# rather than touching Claude's config files directly, so we remain
+# forward-compatible with where Claude stores that state.
+
+install_plugin() {
+    section "Registering clauck plugin with Claude Code"
 
     local clauck_bin="$HOME/.local/bin/clauck"
     if [ ! -x "$clauck_bin" ]; then
-        warn "clauck CLI not found at $clauck_bin — skipping MCP registration"
+        warn "clauck CLI not found at $clauck_bin — skipping plugin registration"
         return 0
     fi
 
+    # Legacy cleanup runs before opt-out so stale state is fixed even when
+    # the user is opting out of new plugin install.
+    strip_legacy_hook
+    strip_legacy_hook_file
+
+    # Also strip any legacy `claude mcp add`-style registration that prior
+    # versions wrote. The plugin's .mcp.json is the new source of truth.
+    if command -v claude >/dev/null 2>&1; then
+        if claude mcp get clauck >/dev/null 2>&1; then
+            claude mcp remove clauck -s user >/dev/null 2>&1 \
+                && ok "removed legacy claude mcp registration (plugin provides it now)"
+        fi
+    fi
+
     if [ "$NO_MCP" -eq 1 ]; then
-        # Persist the opt-out so update-check.sh --apply (which re-runs install.sh)
-        # also skips it on future updates.
         local cfg_dst="$HOME/.clauck/.clauck.config.json"
         if [ "$DRY_RUN" -eq 0 ] && [ -f "$cfg_dst" ]; then
             /usr/bin/python3 - "$cfg_dst" <<'EOF'
@@ -577,16 +627,110 @@ d["no_mcp_install"] = True
 p.write_text(json.dumps(d, indent=2) + "\n")
 EOF
         fi
-        ok "MCP registration skipped (--no-mcp); use 'clauck mcp --install' to register later"
+        ok "plugin registration skipped (--no-mcp); add manually: claude plugin marketplace add CoreyRDean/clauck && claude plugin install clauck@clauck"
         return 0
     fi
 
     if [ "$DRY_RUN" -eq 1 ]; then
-        ok "[dry-run] would run: clauck mcp --install"
+        ok "[dry-run] would run: claude plugin marketplace add CoreyRDean/clauck && claude plugin install clauck@clauck --scope user"
         return 0
     fi
 
-    "$clauck_bin" mcp --install 2>&1 | sed 's/^/  /' || warn "MCP install step reported an error (non-fatal)"
+    if ! command -v claude >/dev/null 2>&1; then
+        warn "claude CLI not on PATH — skipping plugin registration"
+        warn "add manually once installed: claude plugin marketplace add CoreyRDean/clauck && claude plugin install clauck@clauck"
+        return 0
+    fi
+
+    # ── Marketplace: add if absent ──────────────────────────────────────
+    # `claude plugin marketplace list --json` returns an array of
+    # {name, source, ...}. The marketplace name is "clauck" per our
+    # marketplace.json. If it's already there, skip add to keep output quiet.
+    local have_marketplace
+    have_marketplace="$(claude plugin marketplace list --json 2>/dev/null \
+        | /usr/bin/python3 -c "
+import json, sys
+try:
+    data = json.load(sys.stdin)
+    if isinstance(data, list):
+        names = [m.get('name') for m in data if isinstance(m, dict)]
+    elif isinstance(data, dict):
+        names = list(data.keys())
+    else:
+        names = []
+    print('yes' if 'clauck' in names else 'no')
+except Exception:
+    print('unknown')
+" 2>/dev/null || echo "unknown")"
+
+    if [ "$have_marketplace" != "yes" ]; then
+        if claude plugin marketplace add CoreyRDean/clauck >/dev/null 2>&1; then
+            ok "added marketplace: CoreyRDean/clauck"
+        else
+            warn "failed to add marketplace — run manually: claude plugin marketplace add CoreyRDean/clauck"
+            return 0
+        fi
+    else
+        ok "marketplace already added: clauck"
+    fi
+
+    # ── Plugin: install or reconcile version ────────────────────────────
+    # IMPORTANT: `claude plugin list --json` uses `id` (in "plugin@marketplace"
+    # form), NOT `name`. This is asymmetric with `claude plugin marketplace
+    # list --json`, which DOES use `name`. An earlier version of this parser
+    # matched on `name` and always returned "absent", so the version-drift
+    # branch was dead code. If the plugin CLI's output schema changes,
+    # verify with: `claude plugin list --json | head -20`.
+    local plugin_state
+    plugin_state="$(claude plugin list --json 2>/dev/null \
+        | /usr/bin/python3 -c "
+import json, sys
+try:
+    data = json.load(sys.stdin)
+    entries = data if isinstance(data, list) else []
+    for e in entries:
+        if not isinstance(e, dict):
+            continue
+        pid = e.get('id', '')
+        # Matches bare 'clauck' or fully-qualified 'clauck@clauck'.
+        if pid == 'clauck' or pid.startswith('clauck@'):
+            print(f\"installed:{e.get('version','')}\")
+            break
+    else:
+        print('absent')
+except Exception:
+    print('unknown')
+" 2>/dev/null || echo "unknown")"
+
+    # Read the version we just installed. install_files() wrote this file
+    # before install_plugin() is called, so it always reflects the intended
+    # target version even on a fresh install.
+    local our_version=""
+    if [ -f "$HOME/.clauck/.version" ]; then
+        our_version="$(tr -d '[:space:]' < "$HOME/.clauck/.version" | sed 's/^v//')"
+    fi
+
+    case "$plugin_state" in
+        installed:*)
+            local installed_version="${plugin_state#installed:}"
+            if [ -n "$our_version" ] && [ "$installed_version" != "$our_version" ]; then
+                if claude plugin update clauck >/dev/null 2>&1; then
+                    ok "updated plugin: $installed_version → $our_version"
+                else
+                    warn "plugin update failed — run manually: claude plugin update clauck"
+                fi
+            else
+                ok "plugin already installed${installed_version:+ ($installed_version)}"
+            fi
+            ;;
+        absent|unknown)
+            if claude plugin install clauck@clauck --scope user >/dev/null 2>&1; then
+                ok "installed plugin: clauck@clauck (scope: user)"
+            else
+                warn "plugin install failed — run manually: claude plugin install clauck@clauck --scope user"
+            fi
+            ;;
+    esac
 }
 
 # ──────────────────────────────────────────────────────────────────────────
@@ -652,6 +796,15 @@ verify() {
 # ──────────────────────────────────────────────────────────────────────────
 
 banner() {
+    local plugin_line
+    if [ "$NO_MCP" -eq 1 ]; then
+        plugin_line="  Plugin          not registered (--no-mcp). To add later:
+                  claude plugin marketplace add CoreyRDean/clauck
+                  claude plugin install clauck@clauck --scope user"
+    else
+        plugin_line="  Plugin          CoreyRDean/clauck (marketplace) → clauck plugin
+                  Surfaces: skill (/clauck:clauck), SessionStart hook, MCP server"
+    fi
     cat <<EOF
 
 ${C_BOLD}═══════════════════════════════════════════════════════════════${C_RESET}
@@ -661,10 +814,10 @@ ${C_BOLD}═══════════════════════�
   Version         $(cat "$HOME/.clauck/.version" 2>/dev/null | tr -d '[:space:]' || echo unknown)
   Scheduler       com.$USER.claude-scheduler (loaded, tick interval 60s)
   Jobs directory  ~/.clauck/
-  Skill           ~/.claude/skills/clauck/SKILL.md
-  Marketplace     ~/.claude/skills/clauck/marketplace/
-  Hook            ~/.claude/hooks/scheduled-jobs-notice.sh
+${plugin_line}
+  Job marketplace ~/.claude/skills/clauck/marketplace/
   Config          ~/.clauck/.clauck.config.json
+  Desktop setup   docs/desktop-plugin-setup.md (manual — no CLI for Desktop)
 
 ${C_BOLD}Default job installed:${C_RESET}
   heartbeat (hourly liveness check, ~\$1/month at current Haiku pricing)
@@ -707,7 +860,8 @@ ${C_BOLD}Get started (through the clauck CLI):${C_RESET}
   ${C_BOLD}clauck uninstall${C_RESET}                     ${C_DIM}# preserves jobs, state, and logs${C_RESET}
   ${C_BOLD}clauck uninstall --wipe${C_RESET}              ${C_DIM}# also removes ~/.clauck${C_RESET}
 
-${C_DIM}Full docs: ~/.claude/skills/clauck/SKILL.md${C_RESET}
+${C_DIM}Full docs: the clauck plugin skill (invoke /clauck:clauck in any CC session)${C_RESET}
+${C_DIM}Source:    https://github.com/CoreyRDean/clauck${C_RESET}
 
 EOF
 }
@@ -757,11 +911,13 @@ confirm_plan() {
 ${C_BOLD}This installer will:${C_RESET}
   ${C_DIM}core${C_RESET}  Place scheduler + executor scripts in ~/.clauck/
   ${C_DIM}core${C_RESET}  Register a LaunchAgent (com.$USER.claude-scheduler, ticks every 60s)
-  ${C_DIM}opt ${C_RESET}  Install a Claude Code skill at ~/.claude/skills/clauck/
-  ${C_DIM}opt ${C_RESET}  Install a pre-made job marketplace at ~/.claude/skills/clauck/marketplace/
-  ${C_DIM}opt ${C_RESET}  Register a SessionStart hook in ~/.claude/settings.json
-  ${C_DIM}opt ${C_RESET}  Register the MCP server in Claude Desktop and Claude Code (skip with --no-mcp)
+  ${C_DIM}core${C_RESET}  Install a pre-made job marketplace at ~/.claude/skills/clauck/marketplace/
+  ${C_DIM}opt ${C_RESET}  Register the clauck plugin with Claude Code (delivers skill, hook, and
+            MCP server via the plugin system; skip with --no-mcp). Marketplace:
+            CoreyRDean/clauck
+  ${C_DIM}opt ${C_RESET}  Clean up any legacy skill/hook entries from prior-version installs
   ${C_DIM}opt ${C_RESET}  Install the 'heartbeat' job (~\$1/month on Haiku)${legacy_note}
+  ${C_DIM}note${C_RESET} Claude Desktop install is manual — see docs/desktop-plugin-setup.md
 
   Source: ${REPO_URL}${version}
 
@@ -821,8 +977,7 @@ main() {
     migrate_legacy
     install_files "$repo" "$install_source"
     install_plist "$repo"
-    patch_settings
-    install_mcp
+    install_plugin
     verify
     banner
     star_prompt

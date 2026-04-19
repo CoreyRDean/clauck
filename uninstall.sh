@@ -37,7 +37,7 @@ else
     warn "plist not found (already removed?): $PLIST"
 fi
 
-say "Removing runtime scripts, skill, and marketplace"
+say "Removing runtime scripts and legacy integration files"
 FILES=(
     "$HOME/.clauck/scheduler.py"
     "$HOME/.clauck/sizing.py"
@@ -48,6 +48,9 @@ FILES=(
     "$HOME/.clauck/uninstall.sh"
     "$HOME/.clauck/.version"
     "$HOME/.clauck/prompt.md"
+    # Legacy artifacts from pre-plugin installs — removed if present.
+    # Current installs don't create these, but users upgrading from older
+    # versions will have them sitting around.
     "$HOME/.clauck/clauck.mcpb"
     "$HOME/.claude/hooks/scheduled-jobs-notice.sh"
     "$HOME/.claude/skills/clauck/SKILL.md"
@@ -60,15 +63,72 @@ for f in "${FILES[@]}"; do
     fi
 done
 
-# Unregister the Claude Code MCP entry (written by `clauck mcp --install`).
-# Symmetric cleanup: without this, `claude mcp list` retains a stale
-# `clauck` entry pointing at a now-deleted binary, producing "Failed to
-# connect" noise in every future Claude Code session. Best-effort; a
-# missing `claude` CLI or absent registration is not a fatal uninstall error.
+# Unregister Claude Code integrations, in preference order:
+#   1. Plugin uninstall + marketplace removal (current install path).
+#   2. Legacy `claude mcp remove` (pre-plugin installs wrote a direct
+#      `claude mcp add` registration).
+# Both are best-effort; a missing `claude` CLI or absent registration is
+# not a fatal uninstall error.
 if command -v claude >/dev/null 2>&1; then
+    # 1. Plugin path
+    # NOTE: `claude plugin list --json` identifies entries by `id` (of the
+    # form "plugin@marketplace"), NOT by `name`. This is asymmetric with
+    # marketplace list, which uses `name`.
+    if claude plugin list --json 2>/dev/null | /usr/bin/python3 -c "
+import json, sys
+try:
+    data = json.load(sys.stdin)
+    entries = data if isinstance(data, list) else []
+    for e in entries:
+        if not isinstance(e, dict):
+            continue
+        pid = e.get('id', '')
+        if pid == 'clauck' or pid.startswith('clauck@'):
+            sys.exit(0)
+    sys.exit(1)
+except Exception:
+    sys.exit(1)
+" 2>/dev/null; then
+        # Use fully-qualified form + explicit scope to avoid ambiguity when
+        # another marketplace also exposes a 'clauck' plugin. Capture stderr
+        # so uninstall failures surface with their actual reason.
+        uninstall_err="$(claude plugin uninstall clauck@clauck -s user 2>&1)"
+        uninstall_rc=$?
+        if [ "$uninstall_rc" -eq 0 ]; then
+            ok "uninstalled clauck plugin from Claude Code"
+        else
+            warn "plugin uninstall returned ${uninstall_rc}: ${uninstall_err}"
+        fi
+    fi
+
+    # The marketplace can host other plugins too, so we remove it only if
+    # the user passed --wipe. Otherwise leave it — a future `clauck install`
+    # or manual `claude plugin install clauck@clauck` can reuse it.
+    if [ "$WIPE" -eq 1 ]; then
+        if claude plugin marketplace list --json 2>/dev/null | /usr/bin/python3 -c "
+import json, sys
+try:
+    data = json.load(sys.stdin)
+    if isinstance(data, list):
+        names = [m.get('name') for m in data if isinstance(m, dict)]
+    elif isinstance(data, dict):
+        names = list(data.keys())
+    else:
+        names = []
+    sys.exit(0 if 'clauck' in names else 1)
+except Exception:
+    sys.exit(1)
+" 2>/dev/null; then
+            if claude plugin marketplace remove clauck >/dev/null 2>&1; then
+                ok "removed clauck marketplace from Claude Code"
+            fi
+        fi
+    fi
+
+    # 2. Legacy mcp path
     if claude mcp get clauck >/dev/null 2>&1; then
         if claude mcp remove clauck -s user >/dev/null 2>&1; then
-            ok "unregistered clauck from Claude Code (user scope)"
+            ok "removed legacy claude mcp clauck registration"
         fi
     fi
 fi

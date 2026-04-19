@@ -1,0 +1,20 @@
+{
+  "name": "clauck",
+  "metadata": {
+    "description": "Plugins for the clauck local agent runtime — scheduled jobs, pipelines, DAGs, and event triggers running under the user's own macOS account."
+  },
+  "owner": {
+    "name": "CoreyRDean",
+    "url": "https://github.com/CoreyRDean"
+  },
+  "plugins": [
+    {
+      "name": "clauck",
+      "source": "./plugins/clauck",
+      "version": "1.5.7",
+      "description": "clauck — local agent runtime for macOS. Scheduled jobs, pipelines, DAGs, and event triggers running under your own user.",
+      "category": "developer-tools",
+      "tags": ["scheduling", "automation", "cron", "mcp", "macos"]
+    }
+  ]
+}

@@ -1,0 +1,12 @@
+{
+  "name": "clauck",
+  "version": "1.5.7",
+  "description": "clauck — local agent runtime for macOS. Ships the clauck MCP server, the skill reference, and a SessionStart notice that surfaces installed jobs and their semantic hooks to every Claude Code session. Requires the clauck runtime to be installed (~/.local/bin/clauck, LaunchAgent, scheduler). The SessionStart hook self-heals: if the runtime is missing or version-drifted from the plugin, it backgrounds the install.sh bootstrap and informs the agent.",
+  "author": {
+    "name": "CoreyRDean",
+    "url": "https://github.com/CoreyRDean"
+  },
+  "homepage": "https://github.com/CoreyRDean/clauck",
+  "repository": "https://github.com/CoreyRDean/clauck",
+  "license": "MIT"
+}
