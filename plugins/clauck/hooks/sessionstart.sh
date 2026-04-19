@@ -4,15 +4,16 @@
 # Runs on every Claude Code session start. Does two things:
 #
 #   1. Version-drift reconciliation (self-heal). If the clauck runtime
-#      is missing OR its version doesn't match the plugin version,
-#      spawn install.sh in the background (nohup) so CC startup isn't
-#      blocked. Print a one-line notice so the agent and user know it's
-#      happening.
+#      is missing OR its version doesn't match the plugin version, and
+#      we're running in a harness that can actually reach the host Mac
+#      (Claude Code, NOT CoWork's sandbox), spawn install.sh in the
+#      background so CC startup isn't blocked. Print a one-line notice.
+#      In CoWork we advise instead of executing — install.sh from inside
+#      the sandbox would install into the sandbox, not the host.
 #
-#   2. Scheduled-jobs notice. Emit the manifest-driven `<scheduled-jobs-system>`
-#      block so every CC session knows what jobs are installed, their
-#      semantic_hooks, and how to fire them. This is what makes the
-#      "match my intent against the right job" behavior work.
+#   2. Scheduled-jobs notice. Emit the manifest-driven
+#      `<scheduled-jobs-system>` block so every session knows what jobs
+#      are installed, their semantic_hooks, and how to fire them.
 #
 # The plugin version is read from the plugin's own plugin.json, reached via
 # ${CLAUDE_PLUGIN_ROOT}. No network calls unless install.sh is triggered.
@@ -23,11 +24,43 @@ set -eu
 PLUGIN_ROOT="${CLAUDE_PLUGIN_ROOT:-$(cd "$(dirname "$0")/.." && pwd)}"
 PLUGIN_MANIFEST="${PLUGIN_ROOT}/.claude-plugin/plugin.json"
 
-# Runtime paths (where install.sh places clauck).
-CLAUCK_BIN="$HOME/.local/bin/clauck"
-MANIFEST="$HOME/.clauck/.manifest.json"
-VERSION_FILE="$HOME/.clauck/.version"
-UPDATE_AVAILABLE="$HOME/.clauck/.state/.update-available"
+# ── Runtime path resolution ───────────────────────────────────────────
+# Probe for the clauck binary and derive the runtime home from it.
+# Strategy is identical to bin/clauck-mcp-launcher:
+#
+#   1. $HOME/.local/bin/clauck — Mac terminal + Claude Code CLI.
+#   2. /sessions/*/mnt/*/.local/bin/clauck — CoWork sandbox: $HOME is
+#      /sessions/<id>/, the host home is mounted at /sessions/<id>/mnt/<user>/.
+#
+# Both segments of the CoWork mount are per-session / per-user, so we
+# glob instead of hardcoding.
+
+CLAUCK_BIN=""
+CLAUCK_HOME=""
+IN_COWORK_SANDBOX=0
+
+if [ -x "$HOME/.local/bin/clauck" ]; then
+    CLAUCK_BIN="$HOME/.local/bin/clauck"
+    CLAUCK_HOME="$HOME/.clauck"
+else
+    # Probe CoWork mount.
+    for candidate in /sessions/*/mnt/*/.local/bin/clauck; do
+        if [ -x "$candidate" ]; then
+            CLAUCK_BIN="$candidate"
+            # Derive the host home dir: strip /.local/bin/clauck suffix.
+            host_home="${candidate%/.local/bin/clauck}"
+            CLAUCK_HOME="${host_home}/.clauck"
+            IN_COWORK_SANDBOX=1
+            break
+        fi
+    done
+fi
+
+# Runtime state we read (always from CLAUCK_HOME, which is the host home
+# on either platform — direct on Mac, mounted in CoWork).
+MANIFEST="${CLAUCK_HOME}/.manifest.json"
+VERSION_FILE="${CLAUCK_HOME}/.version"
+UPDATE_AVAILABLE="${CLAUCK_HOME}/.state/.update-available"
 
 # Get plugin version. If we can't read it, skip the drift check silently
 # rather than blocking the notice.
@@ -43,10 +76,25 @@ except Exception:
 fi
 
 # ── 1. Drift reconciliation ───────────────────────────────────────────
-# Background the install so CC startup isn't blocked. Log to a
-# well-known location the agent can read back if the user asks.
+# In Claude Code: spawn install.sh in the background so CC startup isn't
+# blocked. In CoWork: advise the user and skip — install.sh from inside
+# the sandbox would install into the sandbox, not the host Mac. State
+# files live at $HOME/.clauck/.state/ (per-session in CoWork, persistent
+# on the host), which is fine: rate-limit state that resets each CoWork
+# session only affects the advisory print frequency.
 INSTALL_LOG="$HOME/.clauck/.state/.plugin-install.log"
+LAST_HEAL_FILE="$HOME/.clauck/.state/.plugin-install.last"
 mkdir -p "$(dirname "$INSTALL_LOG")" 2>/dev/null || true
+
+advise_runtime_missing() {
+    local reason="$1"
+    {
+        echo "clauck plugin: $reason"
+        echo "  Running in CoWork sandbox — can't install on the host from here."
+        echo "  Ask the user to run this on their Mac in a terminal:"
+        echo "    curl -sSL https://raw.githubusercontent.com/CoreyRDean/clauck/main/install.sh | bash"
+    }
+}
 
 run_install_in_background() {
     local reason="$1"
@@ -67,34 +115,51 @@ run_install_in_background() {
     #   -s   → read script from stdin (the curl output)
     #   --   → end bash's own option parsing
     #   --yes → forwarded as $1 to install.sh, suppressing its interactive prompts
-    # An earlier version passed `--yes` directly to bash, which rejected it as
-    # an unknown flag before reading a single byte of the script. That silently
-    # broke every self-heal attempt.
     nohup bash -c "curl -sSL '$install_url' | bash -s -- --yes" \
         >> "$INSTALL_LOG" 2>&1 &
     disown || true
     echo "clauck plugin: $reason — install.sh running in background (log: $INSTALL_LOG)"
 }
 
-if [ ! -x "$CLAUCK_BIN" ]; then
-    # Rate-limit even the "runtime missing" path — if install.sh is failing
-    # for structural reasons, spamming curl every session won't help.
-    LAST_HEAL_FILE_EARLY="$HOME/.clauck/.state/.plugin-install.last"
-    if [ -f "$LAST_HEAL_FILE_EARLY" ]; then
-        last_ts_early=$(cat "$LAST_HEAL_FILE_EARLY" 2>/dev/null || echo 0)
-        now_ts_early=$(date +%s)
-        if [ -n "$last_ts_early" ] && [ "$last_ts_early" -gt 0 ] 2>/dev/null; then
-            if [ $((now_ts_early - last_ts_early)) -lt 3600 ]; then
-                echo "clauck plugin: runtime missing (last self-heal attempt <1h ago, skipping)"
-                exit 0
+# Rate-limit the advisory/heal to once per hour so failed installs or
+# repeated CoWork sessions don't spam the user.
+should_heal_now() {
+    if [ -f "$LAST_HEAL_FILE" ]; then
+        local last_ts
+        last_ts=$(cat "$LAST_HEAL_FILE" 2>/dev/null || echo 0)
+        local now_ts
+        now_ts=$(date +%s)
+        if [ -n "$last_ts" ] && [ "$last_ts" -gt 0 ] 2>/dev/null; then
+            if [ $((now_ts - last_ts)) -lt 3600 ]; then
+                return 1
             fi
         fi
     fi
-    date +%s > "$LAST_HEAL_FILE_EARLY" 2>/dev/null || true
-    run_install_in_background "clauck runtime missing"
-    # Don't emit the scheduled-jobs notice on a fresh install — nothing
-    # to advertise yet. The background install will populate the manifest;
-    # next CC session will get the full notice.
+    return 0
+}
+
+if [ -z "$CLAUCK_BIN" ] || [ ! -x "$CLAUCK_BIN" ]; then
+    # Runtime genuinely missing — nothing at $HOME/.local/bin/clauck AND
+    # no CoWork mount had one. Decide between self-heal (Code on real Mac)
+    # and advise-only (CoWork sandbox, where install.sh can't reach the
+    # host). $HOME starting with /sessions/ is the CoWork signal.
+    case "$HOME" in
+        /sessions/*)
+            IN_COWORK_SANDBOX=1
+            ;;
+    esac
+
+    if should_heal_now; then
+        date +%s > "$LAST_HEAL_FILE" 2>/dev/null || true
+        if [ "$IN_COWORK_SANDBOX" = "1" ]; then
+            advise_runtime_missing "clauck runtime missing (CoWork sandbox)"
+        else
+            run_install_in_background "clauck runtime missing"
+        fi
+    else
+        echo "clauck plugin: runtime missing (notice rate-limited; <1h since last)"
+    fi
+    # Nothing to advertise — no manifest. Exit.
     exit 0
 fi
 
@@ -107,26 +172,20 @@ if [ -n "$PLUGIN_VERSION" ] && [ -f "$VERSION_FILE" ]; then
     BINARY_VERSION_FULL=$(tr -d '[:space:]' < "$VERSION_FILE" | sed 's/^v//')
     BINARY_VERSION_SEMVER="${BINARY_VERSION_FULL%%-*}"
 
-    # Also rate-limit reconciliation: if install.sh fired in the last hour
-    # (success or failure), don't fire it again. Avoids busy-loop on network-
-    # down or rate-limited conditions.
-    LAST_HEAL_FILE="$HOME/.clauck/.state/.plugin-install.last"
-    can_heal=1
-    if [ -f "$LAST_HEAL_FILE" ]; then
-        last_ts=$(cat "$LAST_HEAL_FILE" 2>/dev/null || echo 0)
-        now_ts=$(date +%s)
-        if [ -n "$last_ts" ] && [ "$last_ts" -gt 0 ] 2>/dev/null; then
-            if [ $((now_ts - last_ts)) -lt 3600 ]; then
-                can_heal=0
-            fi
-        fi
-    fi
-
     if [ -n "$BINARY_VERSION_SEMVER" ] \
        && [ "$BINARY_VERSION_SEMVER" != "$PLUGIN_VERSION" ] \
-       && [ "$can_heal" = "1" ]; then
+       && should_heal_now; then
         date +%s > "$LAST_HEAL_FILE" 2>/dev/null || true
-        run_install_in_background "version drift: plugin=${PLUGIN_VERSION}, binary=${BINARY_VERSION_FULL}"
+        if [ "$IN_COWORK_SANDBOX" = "1" ]; then
+            # Can't install from the sandbox — just print the advisory.
+            # The current binary still works for this session; the user
+            # can update on the host side at their convenience.
+            echo "clauck plugin: version drift (plugin=${PLUGIN_VERSION}, binary=${BINARY_VERSION_FULL})"
+            echo "  Running in CoWork sandbox; update on the host Mac:"
+            echo "    curl -sSL https://raw.githubusercontent.com/CoreyRDean/clauck/main/install.sh | bash"
+        else
+            run_install_in_background "version drift: plugin=${PLUGIN_VERSION}, binary=${BINARY_VERSION_FULL}"
+        fi
         # Continue to emit the notice below — the current binary still
         # works for this session; the update applies on the next one.
     fi
