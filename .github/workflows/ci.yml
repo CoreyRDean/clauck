@@ -15,7 +15,8 @@ jobs:
         run: |
           shellcheck --severity=error \
             install.sh uninstall.sh \
-            lib/update-check.sh lib/scheduled-jobs-notice.sh
+            lib/update-check.sh \
+            plugins/clauck/hooks/sessionstart.sh
           echo "shellcheck passed"
 
       - name: Bash 3.2 compatibility check
@@ -26,7 +27,7 @@ jobs:
           #   declare -A           — associative arrays (bash 4+)
           if grep -rEn \
               '\$\{[a-zA-Z_][a-zA-Z0-9_]*,,\}|\$\{[a-zA-Z_][a-zA-Z0-9_]*\^\^\}|(^|[[:space:]])(mapfile|readarray)[[:space:]]|declare[[:space:]]+-[a-zA-Z]*A([[:space:]]|=)' \
-              install.sh uninstall.sh lib/update-check.sh lib/scheduled-jobs-notice.sh \
+              install.sh uninstall.sh lib/update-check.sh plugins/clauck/hooks/sessionstart.sh \
             | grep -v '^[^:]*:[[:digit:]]*:[[:space:]]*#'; then
             echo "ERROR: bash 4+ syntax found — incompatible with macOS bash 3.2" >&2
             exit 1
@@ -36,7 +37,7 @@ jobs:
       - name: Python linting (ruff)
         run: |
           pip install ruff --quiet
-          ruff check --select=E9,F lib/scheduler.py lib/dag-runner.py lib/clauck
+          ruff check --select=E9,F lib/scheduler.py lib/dag-runner.py lib/clauck lib/sizing.py
           echo "ruff passed"
 
   check:
@@ -51,7 +52,7 @@ jobs:
           bash -n lib/run-job.sh
           bash -n lib/trigger-job.sh
           bash -n lib/update-check.sh
-          bash -n lib/scheduled-jobs-notice.sh
+          bash -n plugins/clauck/hooks/sessionstart.sh
           echo "All shell scripts pass syntax check"
 
       - name: Parse-check Python
@@ -59,12 +60,17 @@ jobs:
           /usr/bin/python3 -c "import ast; ast.parse(open('lib/scheduler.py').read())"
           /usr/bin/python3 -c "import ast; ast.parse(open('lib/dag-runner.py').read())"
           /usr/bin/python3 -c "import ast; ast.parse(open('lib/clauck').read())"
+          /usr/bin/python3 -c "import ast; ast.parse(open('lib/sizing.py').read())"
           echo "All Python files parse cleanly"
 
       - name: Validate JSON
         run: |
           /usr/bin/python3 -c "import json; json.load(open('marketplace/index.json'))"
-          echo "marketplace/index.json valid"
+          /usr/bin/python3 -c "import json; json.load(open('plugins/clauck/.claude-plugin/plugin.json'))"
+          /usr/bin/python3 -c "import json; json.load(open('plugins/clauck/.mcp.json'))"
+          /usr/bin/python3 -c "import json; json.load(open('plugins/clauck/hooks/hooks.json'))"
+          /usr/bin/python3 -c "import json; json.load(open('.claude-plugin/marketplace.json'))"
+          echo "All JSON files valid"
 
       - name: Check for secrets
         run: |
