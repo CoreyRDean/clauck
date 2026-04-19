@@ -18,12 +18,11 @@ The contract that governs this project lives in [INTENT.md](INTENT.md).
 
 > **Hey Claude, install clauck**
 >
-> <sub>If Claude can't find it: *"Hey Claude, install CoreyRDean/clauck from GitHub"*</sub>
-
-Paste that into Claude Code. Done.
+> <sub>In **Claude Code**, that triggers the curl install.sh below.</sub>
+> <sub>In **Claude Desktop**, paste *"Create a new CoWork plugin from https://github.com/CoreyRDean/clauck"* instead — Desktop handles plugin creation natively. Then run the installer once in a Mac terminal for the runtime binary.</sub>
 
 ```bash
-# Or one-liner:
+# Runtime install (required on your Mac either way):
 curl -sSL https://raw.githubusercontent.com/CoreyRDean/clauck/main/install.sh | bash
 ```
 
@@ -99,14 +98,19 @@ One command. The installer places the runtime (scheduler, LaunchAgent, CLI at `~
 
 **Non-interactive:** `curl ... | bash -s -- --yes`
 
-**Just tell Claude:** paste *"Hey Claude, install clauck"* into any Claude Code session.
+**Just tell Claude:** paste *"Hey Claude, install clauck"* in Claude Code — the agent runs the curl install.sh above. In Claude Desktop, paste *"Create a new CoWork plugin from https://github.com/CoreyRDean/clauck"* for the Desktop side (and run install.sh in a Mac terminal separately for the runtime binary).
 
 ### Claude Desktop
 
-Desktop has no `/plugin` CLI, so install is a two-step:
+Two things:
 
-1. Run the install.sh above. It places the runtime and binary. On Desktop, the plugin-registration step is skipped automatically (no `claude` CLI available in that context).
-2. Follow [docs/desktop-plugin-setup.md](docs/desktop-plugin-setup.md) — 12 manual steps in Customize → Personal plugins to add the marketplace and install the plugin. Takes ~45 seconds. The plugin's SessionStart hook self-heals runtime drift on subsequent sessions.
+1. **Paste this to Claude Desktop** (CoWork or chat) to create the plugin:
+
+   > Create a new CoWork plugin from `https://github.com/CoreyRDean/clauck`.
+
+   Desktop handles the rest natively — skill, hook, and MCP server get wired in. See [docs/desktop-plugin-setup.md](docs/desktop-plugin-setup.md) for the full reference.
+
+2. **Run the install.sh one-liner in a Mac terminal** to place the runtime binary. The plugin wraps `~/.local/bin/clauck`; without the binary the MCP server can't start. This step is a no-op if you've already installed.
 
 ### Prerequisites
 
