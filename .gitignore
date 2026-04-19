@@ -5,6 +5,9 @@
 .idea/
 .vscode/
 
+# Claude Code agent scratch space (isolated worktrees from `Agent({isolation:"worktree"})`)
+.claude/worktrees/
+
 # Never commit a user's runtime state
 *.log
 .state/
