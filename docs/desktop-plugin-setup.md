@@ -1,74 +1,170 @@
 # clauck — Claude Desktop plugin setup
 
-> **Claude Desktop does not have a CLI for plugin management.** Unlike Claude Code (where `claude plugin marketplace add` and `claude plugin install` work headlessly from the shell), Desktop requires a short manual walkthrough in its Customize panel. Two options below.
+> **For Desktop users.** Claude Desktop has no `/plugin` CLI command (unlike Claude Code). Two install paths below — the **self-build recipe** is the zero-friction one (tell Claude to read this doc; it does the rest). The **UI walkthrough** is the deterministic fallback when the recipe can't reach some step.
 >
-> **Prerequisites:** the clauck runtime must be installed first. Run:
+> **Both paths require the clauck runtime binary installed first.** If `~/.local/bin/clauck` doesn't exist on your Mac, run this in a terminal first:
 >
 > ```bash
 > curl -sSL https://raw.githubusercontent.com/CoreyRDean/clauck/main/install.sh | bash
 > ```
 >
-> This places the `clauck` binary at `~/.local/bin/clauck`, installs the LaunchAgent, and provisions `~/.clauck/`. The Desktop plugin is a Claude-facing wrapper around that runtime; it does not install the runtime itself.
+> The installer places the scheduler, LaunchAgent, and CLI. It will also attempt Claude Code plugin registration (no effect on Desktop directly, but it populates the shared `~/.claude/plugins/` store that Desktop also reads).
 
 ---
 
-## Option A — manual UI walkthrough (works today, guaranteed)
+## Option A — self-build recipe (recommended)
 
-Works in both **Claude Desktop (Code)** and **CoWork**. Takes ~45 seconds.
+Paste this to Claude Desktop:
 
-1. Click **Customize** in the left-hand menu of Claude Desktop.
+> Please read this page and set up the clauck plugin for Claude Desktop by following the **"Recipe for Claude Desktop"** section verbatim: https://github.com/CoreyRDean/clauck/blob/main/docs/desktop-plugin-setup.md
+>
+> When you're done, tell me what you did and whether any step failed. If Filesystem or Shell MCP is not available to you, stop and tell me which steps I need to run manually.
+
+Claude Desktop fetches this file, finds the recipe below, and executes it end-to-end. Assumes Filesystem MCP or Shell/Bash MCP is available.
+
+---
+
+## Recipe for Claude Desktop
+
+**Claude: execute these steps in order. Stop on the first failure and report it verbatim.**
+
+### Step 0 — prerequisites
+
+Run this shell command:
+
+```bash
+test -x "$HOME/.local/bin/clauck" && echo "runtime-ok" || echo "runtime-missing"
+```
+
+- If output is `runtime-ok`: continue to Step 1.
+- If output is `runtime-missing`: run
+  ```bash
+  curl -sSL https://raw.githubusercontent.com/CoreyRDean/clauck/main/install.sh | bash -s -- --yes --no-mcp
+  ```
+  The `--no-mcp` flag skips plugin registration on the Code side (we handle the Desktop-aware registration in Step 2). The `--yes` flag suppresses interactive prompts. After this completes, re-run Step 0's check. If still `runtime-missing`, stop and report the install.sh output to the user.
+
+### Step 1 — verify the shared plugin store
+
+The user-scope plugin store is `~/.claude/plugins/`. Both Claude Code and Claude Desktop read from it. Verify the store exists:
+
+```bash
+mkdir -p "$HOME/.claude/plugins/marketplaces" "$HOME/.claude/plugins/cache"
+test -f "$HOME/.claude/plugins/known_marketplaces.json" || echo '{}' > "$HOME/.claude/plugins/known_marketplaces.json"
+test -f "$HOME/.claude/plugins/installed_plugins.json" || echo '{"version":2,"plugins":{}}' > "$HOME/.claude/plugins/installed_plugins.json"
+echo "store-ready"
+```
+
+### Step 2 — register the marketplace and install the plugin
+
+**If `claude` CLI is on PATH** (check with `command -v claude`): use the CLI, which handles everything idempotently. This is the preferred path — Claude Code's plugin subcommands also register entries in the shared store that Desktop reads.
+
+```bash
+claude plugin marketplace add CoreyRDean/clauck 2>&1 || true
+claude plugin install clauck@clauck --scope user 2>&1 || true
+```
+
+**If `claude` CLI is NOT on PATH** (Desktop-only install, no Code CLI present): fall back to direct filesystem registration.
+
+1. Clone the clauck repo into the marketplaces dir:
+   ```bash
+   rm -rf "$HOME/.claude/plugins/marketplaces/clauck"
+   git clone --depth 1 https://github.com/CoreyRDean/clauck.git "$HOME/.claude/plugins/marketplaces/clauck"
+   ```
+
+2. Register the marketplace. Use Filesystem MCP (or `python3 -c`) to merge into `~/.claude/plugins/known_marketplaces.json`:
+   ```python
+   import json, pathlib, datetime
+   p = pathlib.Path.home() / ".claude/plugins/known_marketplaces.json"
+   d = json.loads(p.read_text()) if p.exists() else {}
+   d["clauck"] = {
+       "source": {"source": "github", "repo": "CoreyRDean/clauck"},
+       "installLocation": str(pathlib.Path.home() / ".claude/plugins/marketplaces/clauck"),
+       "lastUpdated": datetime.datetime.utcnow().isoformat() + "Z",
+   }
+   p.write_text(json.dumps(d, indent=2) + "\n")
+   ```
+
+3. Read the plugin version from the cloned marketplace manifest and copy the plugin contents into the cache:
+   ```bash
+   VERSION=$(python3 -c "import json; print(json.load(open('$HOME/.claude/plugins/marketplaces/clauck/plugins/clauck/.claude-plugin/plugin.json'))['version'])")
+   CACHE="$HOME/.claude/plugins/cache/clauck/clauck/$VERSION"
+   rm -rf "$CACHE"
+   mkdir -p "$CACHE"
+   cp -R "$HOME/.claude/plugins/marketplaces/clauck/plugins/clauck/." "$CACHE/"
+   chmod +x "$CACHE/hooks/sessionstart.sh" "$CACHE/bin/clauck-mcp-launcher"
+   ```
+
+4. Register the plugin as installed. Merge into `~/.claude/plugins/installed_plugins.json`:
+   ```python
+   import json, pathlib, datetime
+   version = "PASTE_VERSION_FROM_STEP_ABOVE"
+   cache = str(pathlib.Path.home() / f".claude/plugins/cache/clauck/clauck/{version}")
+   now = datetime.datetime.utcnow().isoformat() + "Z"
+   p = pathlib.Path.home() / ".claude/plugins/installed_plugins.json"
+   d = json.loads(p.read_text()) if p.exists() else {"version": 2, "plugins": {}}
+   d.setdefault("plugins", {})["clauck@clauck"] = [{
+       "scope": "user",
+       "installPath": cache,
+       "version": version,
+       "installedAt": now,
+       "lastUpdated": now,
+   }]
+   p.write_text(json.dumps(d, indent=2) + "\n")
+   ```
+
+### Step 3 — verify the install
+
+```bash
+ls "$HOME/.claude/plugins/cache/clauck/clauck/"*/
+cat "$HOME/.claude/plugins/installed_plugins.json" | python3 -c "import json,sys; d=json.load(sys.stdin); print([k for k in d.get('plugins',{}) if 'clauck' in k])"
+echo '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"test","version":"1"}}}' | "$HOME/.local/bin/clauck" mcp 2>&1 | head -1
+```
+
+Expected:
+- `ls` shows the plugin cache contents (`plugin.json`, `hooks/`, `skills/`, `bin/`, `.mcp.json`).
+- The `installed_plugins.json` check prints `['clauck@clauck']`.
+- The MCP initialize returns a JSON response with `"serverInfo":{"name":"clauck",...}`.
+
+### Step 4 — activate in Claude Desktop
+
+Tell the user:
+
+> Installation complete. To activate, **restart Claude Desktop** (quit and re-open). When you start a new chat, you should see a `<scheduled-jobs-system>` block injected at the top by the clauck plugin's SessionStart hook. You can also invoke the skill as `/clauck:clauck` or ask me to use any of the clauck MCP tools (list_jobs, fire_job, get_status, etc.).
+>
+> If after restart you don't see the plugin: open Claude Desktop → Customize → Personal plugins. The clauck marketplace and plugin should be listed; click clauck to verify it's enabled.
+
+---
+
+## Option B — manual UI walkthrough (deterministic fallback)
+
+If the recipe fails on any step or you don't have MCP access set up, use the UI:
+
+1. Click **Customize** in the left-hand menu.
 2. Click the **`+`** next to **Personal plugins**.
 3. Click **Create plugin**.
 4. Click **Add Marketplace**.
-5. Type (or paste): `CoreyRDean/clauck`
+5. Type `CoreyRDean/clauck` and confirm.
 6. Click the **`+`** next to **Personal plugins** again.
 7. Click **Browse Plugins**.
 8. Click the **Personal** tab.
 9. Click the **clauck** marketplace.
 10. Click the **clauck** plugin.
 11. Click **Install**.
-12. If the plugin does not activate immediately, restart Claude Desktop.
+12. Restart Claude Desktop if the plugin doesn't activate immediately.
 
-After activation, starting any new Claude Desktop chat will fire the plugin's `SessionStart` hook, which surfaces the installed clauck jobs and semantic hooks into the conversation context.
-
----
-
-## Option B — ask Claude to walk you through it
-
-Paste this message to Claude Desktop:
-
-> Please help me install the clauck plugin by walking me through these 12 steps, one at a time, waiting for me to confirm each step before moving on:
->
-> 1. Click Customize in the left-hand menu.
-> 2. Click the + next to Personal plugins.
-> 3. Click Create plugin.
-> 4. Click Add Marketplace.
-> 5. Type `CoreyRDean/clauck`.
-> 6. Click the + next to Personal plugins again.
-> 7. Click Browse Plugins.
-> 8. Click the Personal tab.
-> 9. Click the clauck marketplace.
-> 10. Click the clauck plugin.
-> 11. Click Install.
-> 12. Restart Claude Desktop if the plugin doesn't activate immediately.
->
-> If something in my UI looks different, tell me what you see and adapt. If any step fails, help me troubleshoot.
-
-The steps are inlined (not referenced by URL) because Claude Desktop can't reliably fetch external URLs unless you have WebFetch enabled. This removes the cognitive load of figuring out what to click without requiring any specific tool access on Desktop's side.
-
-Alternative (requires WebFetch enabled): *"Please help me install the clauck plugin. Read https://github.com/CoreyRDean/clauck/blob/main/docs/desktop-plugin-setup.md and walk me through the Option A steps interactively."*
+To trigger this from chat: paste the above 12 steps into the message ("Please help me install the clauck plugin by walking me through these 12 steps, one at a time...") and Claude Desktop will coach you through them.
 
 ---
 
-## What you get after install
+## What you get
 
 The plugin ships three Claude-facing surfaces:
 
-- **MCP server**: `clauck` — exposes `list_jobs`, `fire_job`, `get_logs`, `inspect_job`, `pause_job`, `resume_job`, `get_status`, `marketplace_list` as MCP tools.
+- **MCP server**: `clauck` — exposes `list_jobs`, `fire_job`, `get_logs`, `inspect_job`, `pause_job`, `resume_job`, `get_status`, `marketplace_list`, `install_job`, `next_fires`, `run_doctor`, `run_work`, `marketplace_info` as MCP tools.
 - **Skill**: `/clauck:clauck` — full reference for authoring jobs, reading logs, pipeline composition, marketplace usage. Loaded on demand.
-- **SessionStart hook**: emits a `<scheduled-jobs-system>` block listing registered jobs, their `semantic_hooks`, and example `trigger_command` invocations at the top of every Desktop session. This is what lets Claude match user intent against the right pre-built job instead of reinventing functionality inline.
+- **SessionStart hook**: emits a `<scheduled-jobs-system>` block listing registered jobs, their `semantic_hooks`, and example `trigger_command` invocations at the top of every Desktop chat. This is what lets Claude match user intent against the right pre-built job.
 
-The SessionStart hook also **self-heals**: if the clauck runtime is missing from `~/.local/bin/clauck` (plugin installed but user forgot `install.sh`) or if the binary version doesn't match the plugin version (plugin auto-updated but binary didn't, or vice versa), the hook spawns `install.sh` in the background and prints a one-line notice. Subsequent sessions see the reconciled state.
+The SessionStart hook also **self-heals**: if the clauck runtime is missing from `~/.local/bin/clauck` (plugin installed but user skipped `install.sh`) or if the binary version doesn't match the plugin version (plugin auto-updated but binary didn't, or vice versa), the hook spawns `install.sh` in the background and prints a one-line notice. Rate-limited to once per hour so failed installs don't spam.
 
 ---
 
@@ -76,29 +172,56 @@ The SessionStart hook also **self-heals**: if the clauck runtime is missing from
 
 When clauck ships a new release:
 
-- **Plugin side** (Desktop): Desktop checks for marketplace updates automatically at launch. If a new plugin version is available, you'll see it offered in the Customize panel. Click Update. If unprompted, use **Browse Plugins** → **Personal** → **clauck** → **Update**.
-- **Runtime side** (binary): either re-run `curl install.sh | bash` manually, or rely on the SessionStart hook's drift-reconciler to background-install the matching version on the next Desktop session.
+- **Claude Code side** (if you also use CC): `claude plugin update clauck` — or just re-run `install.sh`.
+- **Desktop side**: the plugin cache at `~/.claude/plugins/cache/clauck/clauck/<version>/` is version-scoped. Desktop picks up the new version after the marketplace re-sync (restart Desktop or trigger a marketplace update).
+- **Runtime side**: either re-run `install.sh` manually, or let the SessionStart hook's drift-reconciler background-install the matching version on the next Desktop session.
 
-Plugin version and runtime version are coupled via the same `VERSION` file in the repo, so version numbers will match once both sides have reconciled.
+Plugin version and runtime version are coupled via the same `VERSION` file in the repo, so they match once reconciled.
 
 ---
 
 ## Uninstalling
 
-1. Customize → Personal plugins → **clauck** → **Uninstall**.
-2. (Optional) Customize → Personal plugins → the marketplace entry → **Remove marketplace**.
-3. Remove the runtime with `clauck uninstall` (or `clauck uninstall --wipe` to also delete `~/.clauck/`).
+### Via claude CLI (if installed)
+```bash
+claude plugin uninstall clauck@clauck -s user
+claude plugin marketplace remove clauck     # optional — only if not reusing
+clauck uninstall                            # or `clauck uninstall --wipe`
+```
 
-The runtime and plugin are separate concerns — uninstalling one does not uninstall the other. Do both if you want a clean removal.
+### Manual
+```bash
+# Plugin cache + registry
+rm -rf "$HOME/.claude/plugins/cache/clauck"
+rm -rf "$HOME/.claude/plugins/marketplaces/clauck"
+python3 -c "
+import json, pathlib
+for name in ('installed_plugins.json', 'known_marketplaces.json'):
+    p = pathlib.Path.home() / '.claude/plugins' / name
+    if not p.exists(): continue
+    d = json.loads(p.read_text())
+    if name == 'installed_plugins.json':
+        d.get('plugins', {}).pop('clauck@clauck', None)
+    else:
+        d.pop('clauck', None)
+    p.write_text(json.dumps(d, indent=2) + '\n')
+"
+
+# Runtime
+clauck uninstall
+# or: clauck uninstall --wipe
+```
+
+Restart Claude Desktop to pick up the removal.
 
 ---
 
 ## Troubleshooting
 
-**Plugin installs but nothing happens in new chats.** Restart Claude Desktop. Some versions require a restart to load newly-installed Personal plugins.
+**Recipe Step 2 (fallback) — `python3` not found.** macOS ships `/usr/bin/python3` via Xcode CLT. Install Xcode CLT: `xcode-select --install`. Then re-run.
 
-**MCP server shows as failed to connect.** The plugin's `.mcp.json` invokes `clauck` from `PATH`. If `~/.local/bin` isn't on your `PATH` when Desktop launches subprocesses, the command can't be found. Check with: `which clauck` in a terminal. Fix by either adding `~/.local/bin` to your shell's PATH (and restarting Desktop so it picks up the new environment) or re-running `install.sh` which also writes a plist that prepends `~/.local/bin` to the LaunchAgent's PATH.
+**Recipe Step 3 — MCP initialize returns nothing or an error.** The clauck runtime isn't on PATH for the subprocess. Verify: `test -x "$HOME/.local/bin/clauck" && "$HOME/.local/bin/clauck" version`. If the binary is missing, re-run install.sh.
 
-**SessionStart hook shows "clauck runtime missing" every session.** The self-heal is running install.sh in the background but it's failing. Check `~/.clauck/.state/.plugin-install.log` for errors.
+**After restart, Desktop doesn't show the plugin.** Check `~/.claude/plugins/installed_plugins.json` — does `clauck@clauck` appear under `.plugins`? If yes but Desktop ignores it, the Desktop UI may need the marketplace registered via its own flow; fall back to Option B (UI walkthrough).
 
-**Plugin version doesn't match what's in GitHub.** Desktop caches marketplace data. Force a refresh: Customize → Personal plugins → the marketplace entry → click through it to trigger a re-fetch. Or remove and re-add the marketplace.
+**SessionStart hook prints "clauck runtime missing" every session.** The self-heal is running install.sh in the background but it's failing. Check `~/.clauck/.state/.plugin-install.log` for errors. Rate-limited to one attempt per hour.
