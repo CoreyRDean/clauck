@@ -180,21 +180,21 @@ class TestInstallIssueWatcher(unittest.TestCase):
 
     def test_job_file_contains_issue_url(self):
         url = "https://github.com/acme/widget/issues/7"
-        _install_issue_watcher(url)
-        job = Path(self.tmp.name) / "gh-watch-7.md"
+        name = _install_issue_watcher(url)
+        job = Path(self.tmp.name) / f"{name}.md"
         content = job.read_text()
         self.assertIn(url, content)
 
     def test_job_file_has_valid_cron(self):
         url = "https://github.com/acme/widget/issues/7"
-        _install_issue_watcher(url)
-        job = Path(self.tmp.name) / "gh-watch-7.md"
+        name = _install_issue_watcher(url)
+        job = Path(self.tmp.name) / f"{name}.md"
         self.assertIn("cron:", job.read_text())
 
     def test_notify_channel_baked_in(self):
         url = "https://github.com/acme/widget/issues/5"
-        _install_issue_watcher(url, notify_channel="C123ABC")
-        job = Path(self.tmp.name) / "gh-watch-5.md"
+        name = _install_issue_watcher(url, notify_channel="C123ABC")
+        job = Path(self.tmp.name) / f"{name}.md"
         self.assertIn("C123ABC", job.read_text())
 
     def test_invalid_url_raises(self):

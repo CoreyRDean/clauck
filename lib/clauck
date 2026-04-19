@@ -3779,7 +3779,8 @@ def _install_issue_watcher(issue_url: str, notify_channel: str = "") -> str:
     repo = m.group(1)
     number = m.group(2)
 
-    job_name = f"gh-watch-{number}"
+    slug = _re.sub(r"[^a-z0-9]+", "-", repo.lower()).strip("-")
+    job_name = f"gh-watch-{slug}-{number}"
     job_path = JOBS_DIR / f"{job_name}.md"
 
     notify_default = notify_channel or ""
@@ -3798,10 +3799,8 @@ tags:
   - monitoring
   - issue-watcher
 inputs:
-  - name: ISSUE_URL
-    default: "{issue_url}"
-  - name: NOTIFY_CHANNEL
-    default: "{notify_default}"
+  - {{name: ISSUE_URL, default: "{issue_url}"}}
+  - {{name: NOTIFY_CHANNEL, default: "{notify_default}"}}
 ---
 """
     job_path.write_text(frontmatter + "\n" + _WATCHER_PROMPT_BODY)
