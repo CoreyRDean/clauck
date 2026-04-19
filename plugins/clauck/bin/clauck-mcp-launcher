@@ -1,0 +1,26 @@
+#!/bin/bash
+# clauck MCP launcher — wrapper around the installed clauck CLI.
+#
+# Why this exists: the plugin's .mcp.json could point at `command: "clauck"`
+# directly, but that relies on ~/.local/bin being on the PATH of whatever
+# spawns the subprocess. GUI-launched Claude Desktop on macOS typically runs
+# with a minimal PATH (/usr/bin:/bin:/usr/sbin:/sbin) — ~/.local/bin is NOT
+# there. So a plain `command: "clauck"` would fail on Desktop despite working
+# on Claude Code (which inherits the user's shell PATH).
+#
+# This shell script runs under bash with HOME already set, so we can reference
+# ~/.local/bin/clauck explicitly and avoid the PATH dependency. The plugin's
+# .mcp.json points at ${CLAUDE_PLUGIN_ROOT}/bin/clauck-mcp-launcher, which
+# resolves correctly in both CC and Desktop contexts.
+
+set -eu
+
+CLAUCK_BIN="${HOME}/.local/bin/clauck"
+
+if [ ! -x "${CLAUCK_BIN}" ]; then
+    echo "clauck-mcp-launcher: clauck binary not found at ${CLAUCK_BIN}" >&2
+    echo "clauck-mcp-launcher: run install.sh first: curl -sSL https://raw.githubusercontent.com/CoreyRDean/clauck/main/install.sh | bash" >&2
+    exit 127
+fi
+
+exec "${CLAUCK_BIN}" mcp "$@"

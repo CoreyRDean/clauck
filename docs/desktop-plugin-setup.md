@@ -37,9 +37,26 @@ After activation, starting any new Claude Desktop chat will fire the plugin's `S
 
 Paste this message to Claude Desktop:
 
-> Please help me install the clauck plugin. Read https://github.com/CoreyRDean/clauck/blob/main/docs/desktop-plugin-setup.md and walk me through the Option A steps in order, one at a time, waiting for me to confirm each step before moving to the next. If I tell you something looks different in my UI, use that information to adapt the next step.
+> Please help me install the clauck plugin by walking me through these 12 steps, one at a time, waiting for me to confirm each step before moving on:
+>
+> 1. Click Customize in the left-hand menu.
+> 2. Click the + next to Personal plugins.
+> 3. Click Create plugin.
+> 4. Click Add Marketplace.
+> 5. Type `CoreyRDean/clauck`.
+> 6. Click the + next to Personal plugins again.
+> 7. Click Browse Plugins.
+> 8. Click the Personal tab.
+> 9. Click the clauck marketplace.
+> 10. Click the clauck plugin.
+> 11. Click Install.
+> 12. Restart Claude Desktop if the plugin doesn't activate immediately.
+>
+> If something in my UI looks different, tell me what you see and adapt. If any step fails, help me troubleshoot.
 
-Claude Desktop will read this file and coach you through the 12 steps interactively. This is not automation (Desktop's plugin configuration is not exposed as a filesystem surface clauck can modify from outside the app), but it removes the cognitive load of figuring out what to click.
+The steps are inlined (not referenced by URL) because Claude Desktop can't reliably fetch external URLs unless you have WebFetch enabled. This removes the cognitive load of figuring out what to click without requiring any specific tool access on Desktop's side.
+
+Alternative (requires WebFetch enabled): *"Please help me install the clauck plugin. Read https://github.com/CoreyRDean/clauck/blob/main/docs/desktop-plugin-setup.md and walk me through the Option A steps interactively."*
 
 ---
 

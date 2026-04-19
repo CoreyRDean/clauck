@@ -675,6 +675,12 @@ except Exception:
     fi
 
     # ── Plugin: install or reconcile version ────────────────────────────
+    # IMPORTANT: `claude plugin list --json` uses `id` (in "plugin@marketplace"
+    # form), NOT `name`. This is asymmetric with `claude plugin marketplace
+    # list --json`, which DOES use `name`. An earlier version of this parser
+    # matched on `name` and always returned "absent", so the version-drift
+    # branch was dead code. If the plugin CLI's output schema changes,
+    # verify with: `claude plugin list --json | head -20`.
     local plugin_state
     plugin_state="$(claude plugin list --json 2>/dev/null \
         | /usr/bin/python3 -c "
@@ -683,7 +689,11 @@ try:
     data = json.load(sys.stdin)
     entries = data if isinstance(data, list) else []
     for e in entries:
-        if isinstance(e, dict) and e.get('name') == 'clauck':
+        if not isinstance(e, dict):
+            continue
+        pid = e.get('id', '')
+        # Matches bare 'clauck' or fully-qualified 'clauck@clauck'.
+        if pid == 'clauck' or pid.startswith('clauck@'):
             print(f\"installed:{e.get('version','')}\")
             break
     else:
@@ -786,6 +796,15 @@ verify() {
 # ──────────────────────────────────────────────────────────────────────────
 
 banner() {
+    local plugin_line
+    if [ "$NO_MCP" -eq 1 ]; then
+        plugin_line="  Plugin          not registered (--no-mcp). To add later:
+                  claude plugin marketplace add CoreyRDean/clauck
+                  claude plugin install clauck@clauck --scope user"
+    else
+        plugin_line="  Plugin          CoreyRDean/clauck (marketplace) → clauck plugin
+                  Surfaces: skill (/clauck:clauck), SessionStart hook, MCP server"
+    fi
     cat <<EOF
 
 ${C_BOLD}═══════════════════════════════════════════════════════════════${C_RESET}
@@ -795,8 +814,7 @@ ${C_BOLD}═══════════════════════�
   Version         $(cat "$HOME/.clauck/.version" 2>/dev/null | tr -d '[:space:]' || echo unknown)
   Scheduler       com.$USER.claude-scheduler (loaded, tick interval 60s)
   Jobs directory  ~/.clauck/
-  Plugin          CoreyRDean/clauck (marketplace) → clauck plugin
-                  Surfaces: skill (/clauck:clauck), SessionStart hook, MCP server
+${plugin_line}
   Job marketplace ~/.claude/skills/clauck/marketplace/
   Config          ~/.clauck/.clauck.config.json
   Desktop setup   docs/desktop-plugin-setup.md (manual — no CLI for Desktop)

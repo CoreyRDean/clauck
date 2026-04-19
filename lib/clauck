@@ -2827,11 +2827,12 @@ For each **actionable, non-optional** finding, include a one-line code block und
   - {JOBS_DIR}/update-check.sh
   - {JOBS_DIR}/uninstall.sh
   - {JOBS_DIR}/.version
-  - ~/.claude/hooks/scheduled-jobs-notice.sh
-  - ~/.claude/scheduled-jobs-prompt.md
   - ~/.local/bin/clauck
-  - ~/.claude/skills/clauck/SKILL.md
   - ~/Library/LaunchAgents/com.*.claude-scheduler.plist
+  - Any file inside the clauck plugin cache (~/.claude/plugins/cache/clauck/…) —
+    plugin files are managed by `claude plugin install/update/uninstall`, not
+    by direct edits. If a plugin file needs to change, that's a clauck repo
+    patch + release, not a runtime mutation.
 
 **Escalation path (the ONLY legitimate reason not to apply a fix in this mode):** if the root cause lives in a system file above, STOP touching it and write a "## Escalation: system file mutation requested" block with:
   - Which system file(s) need changing

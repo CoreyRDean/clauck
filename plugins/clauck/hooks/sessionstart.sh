@@ -63,13 +63,34 @@ run_install_in_background() {
         echo "install url: $install_url"
         echo "--- install.sh output follows ---"
     } >> "$INSTALL_LOG"
-    nohup bash -c "curl -sSL '$install_url' | bash --yes" \
+    # `bash -s -- --yes`:
+    #   -s   → read script from stdin (the curl output)
+    #   --   → end bash's own option parsing
+    #   --yes → forwarded as $1 to install.sh, suppressing its interactive prompts
+    # An earlier version passed `--yes` directly to bash, which rejected it as
+    # an unknown flag before reading a single byte of the script. That silently
+    # broke every self-heal attempt.
+    nohup bash -c "curl -sSL '$install_url' | bash -s -- --yes" \
         >> "$INSTALL_LOG" 2>&1 &
     disown || true
     echo "clauck plugin: $reason — install.sh running in background (log: $INSTALL_LOG)"
 }
 
 if [ ! -x "$CLAUCK_BIN" ]; then
+    # Rate-limit even the "runtime missing" path — if install.sh is failing
+    # for structural reasons, spamming curl every session won't help.
+    LAST_HEAL_FILE_EARLY="$HOME/.clauck/.state/.plugin-install.last"
+    if [ -f "$LAST_HEAL_FILE_EARLY" ]; then
+        last_ts_early=$(cat "$LAST_HEAL_FILE_EARLY" 2>/dev/null || echo 0)
+        now_ts_early=$(date +%s)
+        if [ -n "$last_ts_early" ] && [ "$last_ts_early" -gt 0 ] 2>/dev/null; then
+            if [ $((now_ts_early - last_ts_early)) -lt 3600 ]; then
+                echo "clauck plugin: runtime missing (last self-heal attempt <1h ago, skipping)"
+                exit 0
+            fi
+        fi
+    fi
+    date +%s > "$LAST_HEAL_FILE_EARLY" 2>/dev/null || true
     run_install_in_background "clauck runtime missing"
     # Don't emit the scheduled-jobs notice on a fresh install — nothing
     # to advertise yet. The background install will populate the manifest;
@@ -78,9 +99,34 @@ if [ ! -x "$CLAUCK_BIN" ]; then
 fi
 
 if [ -n "$PLUGIN_VERSION" ] && [ -f "$VERSION_FILE" ]; then
-    BINARY_VERSION=$(tr -d '[:space:]' < "$VERSION_FILE" | sed 's/^v//')
-    if [ -n "$BINARY_VERSION" ] && [ "$BINARY_VERSION" != "$PLUGIN_VERSION" ]; then
-        run_install_in_background "version drift: plugin=${PLUGIN_VERSION}, binary=${BINARY_VERSION}"
+    # Strip leading 'v' and trailing build metadata (-nightly-abc123, etc.)
+    # for comparison. install.sh records tags like "v1.5.7-nightly-abc1234"
+    # on nightly channels; we want drift detection that doesn't false-fire
+    # on every session just because the nightly has a build suffix but the
+    # plugin manifest holds the bare semver.
+    BINARY_VERSION_FULL=$(tr -d '[:space:]' < "$VERSION_FILE" | sed 's/^v//')
+    BINARY_VERSION_SEMVER="${BINARY_VERSION_FULL%%-*}"
+
+    # Also rate-limit reconciliation: if install.sh fired in the last hour
+    # (success or failure), don't fire it again. Avoids busy-loop on network-
+    # down or rate-limited conditions.
+    LAST_HEAL_FILE="$HOME/.clauck/.state/.plugin-install.last"
+    can_heal=1
+    if [ -f "$LAST_HEAL_FILE" ]; then
+        last_ts=$(cat "$LAST_HEAL_FILE" 2>/dev/null || echo 0)
+        now_ts=$(date +%s)
+        if [ -n "$last_ts" ] && [ "$last_ts" -gt 0 ] 2>/dev/null; then
+            if [ $((now_ts - last_ts)) -lt 3600 ]; then
+                can_heal=0
+            fi
+        fi
+    fi
+
+    if [ -n "$BINARY_VERSION_SEMVER" ] \
+       && [ "$BINARY_VERSION_SEMVER" != "$PLUGIN_VERSION" ] \
+       && [ "$can_heal" = "1" ]; then
+        date +%s > "$LAST_HEAL_FILE" 2>/dev/null || true
+        run_install_in_background "version drift: plugin=${PLUGIN_VERSION}, binary=${BINARY_VERSION_FULL}"
         # Continue to emit the notice below — the current binary still
         # works for this session; the update applies on the next one.
     fi

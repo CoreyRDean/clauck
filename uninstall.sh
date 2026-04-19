@@ -71,16 +71,33 @@ done
 # not a fatal uninstall error.
 if command -v claude >/dev/null 2>&1; then
     # 1. Plugin path
+    # NOTE: `claude plugin list --json` identifies entries by `id` (of the
+    # form "plugin@marketplace"), NOT by `name`. This is asymmetric with
+    # marketplace list, which uses `name`.
     if claude plugin list --json 2>/dev/null | /usr/bin/python3 -c "
 import json, sys
 try:
     data = json.load(sys.stdin)
-    sys.exit(0 if any(isinstance(e, dict) and e.get('name') == 'clauck' for e in (data if isinstance(data, list) else [])) else 1)
+    entries = data if isinstance(data, list) else []
+    for e in entries:
+        if not isinstance(e, dict):
+            continue
+        pid = e.get('id', '')
+        if pid == 'clauck' or pid.startswith('clauck@'):
+            sys.exit(0)
+    sys.exit(1)
 except Exception:
     sys.exit(1)
 " 2>/dev/null; then
-        if claude plugin uninstall clauck >/dev/null 2>&1; then
+        # Use fully-qualified form + explicit scope to avoid ambiguity when
+        # another marketplace also exposes a 'clauck' plugin. Capture stderr
+        # so uninstall failures surface with their actual reason.
+        uninstall_err="$(claude plugin uninstall clauck@clauck -s user 2>&1)"
+        uninstall_rc=$?
+        if [ "$uninstall_rc" -eq 0 ]; then
             ok "uninstalled clauck plugin from Claude Code"
+        else
+            warn "plugin uninstall returned ${uninstall_rc}: ${uninstall_err}"
         fi
     fi
 

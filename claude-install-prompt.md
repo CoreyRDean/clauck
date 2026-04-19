@@ -17,9 +17,11 @@ and report cleanly.
    itself working by firing a heartbeat job ad-hoc. Report the success banner
    verbatim to the user, then briefly explain:
    - Default heartbeat job is running hourly, ~$1/month.
-   - SessionStart hook will advertise the system to future Claude sessions.
-   - The `scheduled-jobs` skill at `~/.claude/skills/clauck/SKILL.md`
-     is how they manage it going forward.
+   - SessionStart hook (shipped by the clauck plugin) will advertise the
+     system to future Claude Code sessions.
+   - The `/clauck:clauck` skill (also shipped by the plugin) is how they
+     manage it going forward. Invoke it in any CC session.
+   - Desktop users: manual plugin install per `docs/desktop-plugin-setup.md`.
 
 3. If the installer exits non-zero, diagnose:
    - Check the printed error for the specific step that failed.

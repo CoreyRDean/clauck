@@ -1,8 +1,7 @@
 {
   "mcpServers": {
     "clauck": {
-      "command": "clauck",
-      "args": ["mcp"]
+      "command": "${CLAUDE_PLUGIN_ROOT}/bin/clauck-mcp-launcher"
     }
   }
 }
