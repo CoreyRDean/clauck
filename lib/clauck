@@ -40,7 +40,12 @@ Usage:
                                          fetches open issues for duplicate detection, prompts
                                          to submit when run interactively.
                                          No args: interactive intent-mining session.
-                                         --inbox: review pending drafts from prior sessions.
+                                         --inbox: review pending drafts (user and auto-generated).
+    clauck config set auto_report.mode <off|draft|auto>
+                                         Control autonomous issue reporting from doctor and jobs:
+                                         off (default) — disabled. draft — background agents
+                                         queue drafts in ~/.clauck/reports/ for your review.
+                                         auto — agents submit directly (rate-limited to 3/day).
     clauck cost [<name>] [--days N] [--all]  Spend summary from job run logs
     clauck history [<name>] [--last N] [--days N] [--all]
                                          Cross-job invocation timeline (most recent first)
@@ -145,6 +150,18 @@ def jit_update_check() -> None:
                   f" (run: clauck update --apply)\033[0m")
     except (OSError, ValueError, KeyError):
         pass
+
+
+def _notify_pending_auto_reports() -> None:
+    """Print a one-line notice if background agents have queued auto-draft reports."""
+    auto_report_mode = load_config().get("auto_report", {}).get("mode", "off")
+    if auto_report_mode == "off" or not REPORTS_DIR.exists():
+        return
+    auto_drafts = list(REPORTS_DIR.glob("*-auto.json"))
+    if auto_drafts:
+        n = len(auto_drafts)
+        print(f"\033[33m  {n} auto-report draft(s) from background agents"
+              f" — run: clauck report --inbox\033[0m")
 
 
 def die(msg: str) -> None:
@@ -410,6 +427,16 @@ def cmd_status() -> None:
           f" (auto-apply: {'on' if auto_update.get('auto_apply', False) else 'off'})")
     notif = config.get("notifications", False)
     print(f"  notifications: {'on' if notif else 'off'} (toggle: clauck config set notifications true/false)")
+
+    # Check for pending auto-report drafts
+    auto_report_mode = config.get("auto_report", {}).get("mode", "off")
+    print(f"  auto-report: {auto_report_mode}"
+          f" (change: clauck config set auto_report.mode draft|auto|off)")
+    if auto_report_mode != "off" and REPORTS_DIR.exists():
+        auto_drafts = list(REPORTS_DIR.glob("*-auto.json"))
+        if auto_drafts:
+            print(f"  auto-report drafts: {len(auto_drafts)} pending"
+                  f" — run: clauck report --inbox")
 
     # Check for pending update
     available = STATE_DIR / ".update-available"
@@ -3504,6 +3531,26 @@ def cmd_doctor(
             fix_argv.append(fix_instruction)
             os.execvp(sys.argv[0], fix_argv)
 
+    # Auto-report hook: if the dry-mode doctor found a clauck system-file
+    # issue (one the user cannot fix outside the install), queue a draft in
+    # REPORTS_DIR so the user can review and submit it later.  The heuristic
+    # is conservative: we only fire when the doctor report or fix_instruction
+    # text references a known clauck internal file name.
+    if dry and claude_result and not is_error:
+        combined = (claude_result + " " + fix_instruction).lower()
+        if any(f in combined for f in _CLAUCK_SYSTEM_FILES):
+            import hashlib as _hl
+            dedup_src = (fix_instruction or claude_result[:200]).encode()
+            dedup = _hl.md5(dedup_src).hexdigest()[:12]
+            draft_title = (fix_instruction or "clauck system issue detected by doctor")[:120]
+            _write_auto_draft(
+                source="clauck-doctor",
+                title=draft_title,
+                body=f"## Doctor finding\n\n{claude_result[:1500]}",
+                labels=["bug"],
+                dedupe_key=f"doctor-{dedup}",
+            )
+
     # Optional interactive follow-up on a resolvable session.
     if interactive and session_id:
         print("\n  Opening interactive session for follow-up...")
@@ -3831,14 +3878,75 @@ inputs:
 
 
 def _find_pending_drafts() -> list:
-    """Return list of draft paths in REPORTS_DIR, newest first."""
+    """Return list of draft paths in REPORTS_DIR, newest first.
+
+    Includes both user-created (*-draft.json) and agent-generated (*-auto.json) drafts.
+    """
     if not REPORTS_DIR.exists():
         return []
-    return sorted(
-        REPORTS_DIR.glob("*-draft.json"),
-        key=lambda p: p.stat().st_mtime,
-        reverse=True,
-    )
+    all_drafts = list(REPORTS_DIR.glob("*-draft.json")) + list(REPORTS_DIR.glob("*-auto.json"))
+    return sorted(all_drafts, key=lambda p: p.stat().st_mtime, reverse=True)
+
+
+# System files that, when mentioned in a doctor report, indicate a clauck
+# internal bug the user cannot fix outside the clauck install — suitable
+# for autonomous reporting.
+_CLAUCK_SYSTEM_FILES = frozenset({
+    "scheduler.py", "dag-runner.py", "run-job.sh", "trigger-job.sh",
+    "update-check.sh", "clauck-mcp", "install.sh", "uninstall.sh",
+})
+
+
+def _write_auto_draft(
+    source: str,
+    title: str,
+    body: str,
+    labels: "list[str] | None" = None,
+    dedupe_key: str = "",
+) -> "Path | None":
+    """Write a background-generated draft report to REPORTS_DIR.
+
+    Called by doctor and other agents when they detect reportable
+    clauck-internal issues. Returns the path written, or None if
+    auto_report.mode is 'off' or deduplication suppressed the write.
+
+    dedupe_key prevents re-writing the same finding within 7 days.
+    """
+    import time as _t
+
+    auto_report_mode = load_config().get("auto_report", {}).get("mode", "off")
+    if auto_report_mode == "off":
+        return None
+
+    REPORTS_DIR.mkdir(parents=True, exist_ok=True)
+
+    if dedupe_key:
+        cutoff = _t.time() - 7 * 86400
+        for existing in REPORTS_DIR.glob("*-auto.json"):
+            try:
+                d = json.loads(existing.read_text())
+                if d.get("dedupe_key") == dedupe_key and existing.stat().st_mtime > cutoff:
+                    return None
+            except (OSError, ValueError):
+                pass
+
+    import datetime as _dt
+    import uuid as _uuid
+    ts = _dt.datetime.utcnow().strftime("%Y%m%dT%H%M%S%f")[:-3] + "Z"
+    safe_source = source.replace("/", "-").replace(" ", "-")[:40]
+    draft = {
+        "title": title,
+        "body": body,
+        "labels": labels or ["bug"],
+        "classification": "bug",
+        "source": source,
+        "auto": True,
+        "ts": ts,
+        "dedupe_key": dedupe_key,
+    }
+    path = REPORTS_DIR / f"{ts}-{safe_source}-{_uuid.uuid4().hex[:8]}-auto.json"
+    path.write_text(json.dumps(draft, indent=2) + "\n")
+    return path
 
 
 def _build_interactive_mining_prompt(draft_path: "Path", prefilled: dict | None = None) -> str:
@@ -3998,8 +4106,11 @@ def _handle_report_inbox() -> None:
         title = draft.get("title", "(untitled)")
         classification = draft.get("classification", "feature")
         mtime = datetime.fromtimestamp(path.stat().st_mtime, tz=timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+        source_tag = f"  source: {draft['source']} (auto-generated)" if draft.get("auto") else ""
         print(f"\n  [{i}/{len(drafts)}] {classification}: {title}")
         print(f"  saved: {mtime}")
+        if source_tag:
+            print(source_tag)
         print(f"  {sep}")
         body_preview = (draft.get("body") or "")[:300]
         for line in body_preview.splitlines()[:8]:
@@ -4516,6 +4627,9 @@ def main() -> None:
 
     # JIT update notice (reads local state file, no network)
     jit_update_check()
+    # Pending auto-report notice (suppressed when user is already in report --inbox)
+    if len(args) < 2 or args[0] != "report" or "--inbox" not in args:
+        _notify_pending_auto_reports()
 
     cmd = args[0]
     rest = args[1:]
