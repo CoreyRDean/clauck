@@ -3,24 +3,50 @@
 #
 # Why this exists: the plugin's .mcp.json could point at `command: "clauck"`
 # directly, but that relies on ~/.local/bin being on the PATH of whatever
-# spawns the subprocess. GUI-launched Claude Desktop on macOS typically runs
-# with a minimal PATH (/usr/bin:/bin:/usr/sbin:/sbin) — ~/.local/bin is NOT
-# there. So a plain `command: "clauck"` would fail on Desktop despite working
-# on Claude Code (which inherits the user's shell PATH).
+# spawns the subprocess. GUI-launched Claude Desktop on macOS typically
+# runs with a minimal PATH (/usr/bin:/bin:/usr/sbin:/sbin), and CoWork
+# sandboxes `$HOME` to a per-session path — `$HOME/.local/bin/clauck`
+# doesn't exist there at all.
 #
-# This shell script runs under bash with HOME already set, so we can reference
-# ~/.local/bin/clauck explicitly and avoid the PATH dependency. The plugin's
-# .mcp.json points at ${CLAUDE_PLUGIN_ROOT}/bin/clauck-mcp-launcher, which
-# resolves correctly in both CC and Desktop contexts.
+# This shell script probes for the clauck binary in order of preference:
+#
+#   1. $HOME/.local/bin/clauck — correct for Mac terminal + Claude Code CLI.
+#   2. /sessions/*/mnt/*/.local/bin/clauck — CoWork: $HOME is sandboxed to
+#      /sessions/<session-id>/, and the host user's real home is mounted
+#      at /sessions/<session-id>/mnt/<user>/. Both segments are per-session
+#      and per-user, so we glob instead of hardcoding.
+#
+# If neither path resolves, exit 127 with a clear pointer at install.sh.
+# The plugin manifest points at this script via ${CLAUDE_PLUGIN_ROOT}/bin/
+# clauck-mcp-launcher, which resolves identically across every harness.
 
 set -eu
 
-CLAUCK_BIN="${HOME}/.local/bin/clauck"
+CLAUCK_BIN=""
 
-if [ ! -x "${CLAUCK_BIN}" ]; then
-    echo "clauck-mcp-launcher: clauck binary not found at ${CLAUCK_BIN}" >&2
-    echo "clauck-mcp-launcher: run install.sh first: curl -sSL https://raw.githubusercontent.com/CoreyRDean/clauck/main/install.sh | bash" >&2
+if [ -x "$HOME/.local/bin/clauck" ]; then
+    CLAUCK_BIN="$HOME/.local/bin/clauck"
+else
+    # CoWork fallback. The `-x` test is false for the literal glob pattern
+    # when no files match, so this loop is a no-op in that case.
+    for candidate in /sessions/*/mnt/*/.local/bin/clauck; do
+        if [ -x "$candidate" ]; then
+            CLAUCK_BIN="$candidate"
+            break
+        fi
+    done
+fi
+
+if [ -z "$CLAUCK_BIN" ] || [ ! -x "$CLAUCK_BIN" ]; then
+    {
+        echo "clauck-mcp-launcher: clauck binary not found."
+        echo "  Probed: \$HOME/.local/bin/clauck"
+        echo "  Probed: /sessions/*/mnt/*/.local/bin/clauck  (CoWork sandbox)"
+        echo ""
+        echo "  Install the runtime on the host Mac:"
+        echo "    curl -sSL https://raw.githubusercontent.com/CoreyRDean/clauck/main/install.sh | bash"
+    } >&2
     exit 127
 fi
 
-exec "${CLAUCK_BIN}" mcp "$@"
+exec "$CLAUCK_BIN" mcp "$@"
