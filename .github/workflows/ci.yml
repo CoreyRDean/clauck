@@ -45,21 +45,14 @@ jobs:
       - name: Plugin + marketplace version drift check
         run: |
           # The plugin hook's drift reconciliation reads `version` from
-          # plugin.json. The marketplace registry also carries a version for
-          # each plugin entry. Both must match the repo's VERSION file (the
-          # single source of truth) — otherwise CC's marketplace cache will
-          # serve one version while the hook thinks it's another, and users
-          # get spurious self-heal invocations every session.
+          # plugin.json. The marketplace registry also carries a version
+          # for each plugin entry. Both must match the repo's VERSION file
+          # (the single source of truth) — otherwise CC's marketplace
+          # cache will serve one version while the hook thinks it's
+          # another, and users get spurious self-heal invocations.
           VERSION_FILE=$(tr -d '[:space:]' < VERSION | sed 's/^v//')
           PLUGIN_VERSION=$(/usr/bin/python3 -c "import json; print(json.load(open('plugins/clauck/.claude-plugin/plugin.json'))['version'])")
-          MARKETPLACE_VERSION=$(/usr/bin/python3 -c "
-import json
-m = json.load(open('.claude-plugin/marketplace.json'))
-for p in m.get('plugins', []):
-    if p.get('name') == 'clauck':
-        print(p.get('version', ''))
-        break
-")
+          MARKETPLACE_VERSION=$(/usr/bin/python3 -c "import json; m=json.load(open('.claude-plugin/marketplace.json')); print(next((p.get('version','') for p in m.get('plugins',[]) if p.get('name')=='clauck'), ''))")
           echo "VERSION file:       $VERSION_FILE"
           echo "plugin.json:        $PLUGIN_VERSION"
           echo "marketplace.json:   $MARKETPLACE_VERSION"
