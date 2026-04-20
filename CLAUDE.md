@@ -77,6 +77,19 @@ You can't install clauck directly — clauck needs a persistent scheduler on the
 
 3. If they also use Claude Desktop and want it integrated there, they can paste *"Create a new CoWork plugin from https://github.com/CoreyRDean/clauck"* to any Desktop chat after running the installer.
 
+### CoWork plugin update prompt (keep this one-liner handy)
+
+When the user's clauck CLI (host Mac) version doesn't match the clauck plugin version inside CoWork, reconciliation is a paste:
+
+> Pull latest plugins/clauck/ from github.com/CoreyRDean/clauck and build a Cowork .plugin update.
+
+Two triggers for when to hand this to the user:
+
+1. **Plugin's SessionStart hook detects drift at CoWork load time** → the hook already prints the prompt into the agent's context with an explanation. Agent should surface it; user pastes it in the CoWork chat.
+2. **User just updated the CLI** (ran `install.sh` again) → `install.sh`'s success banner now prints the prompt too. If they're in a CoWork session after updating, they need to paste it to bring the plugin to match.
+
+Don't make users hunt for this string. If you detect CLI↔plugin drift in any context, print the one-liner verbatim so they can copy-paste.
+
 ### How the two sides stay in sync
 
 - Plugin and runtime versions are coupled via the same `VERSION` file in this repo, so release tags produce matched plugin+runtime versions.

@@ -860,6 +860,16 @@ ${C_BOLD}Get started (through the clauck CLI):${C_RESET}
   ${C_BOLD}clauck uninstall${C_RESET}                     ${C_DIM}# preserves jobs, state, and logs${C_RESET}
   ${C_BOLD}clauck uninstall --wipe${C_RESET}              ${C_DIM}# also removes ~/.clauck${C_RESET}
 
+${C_BOLD}If you also use the clauck plugin in Claude Desktop / CoWork:${C_RESET}
+  The CLI you just installed may not match the plugin version CoWork has
+  cached. To bring the CoWork plugin up to date, paste this into a CoWork
+  chat:
+
+    ${C_BOLD}Pull latest plugins/clauck/ from github.com/CoreyRDean/clauck and build a Cowork .plugin update.${C_RESET}
+
+  (Skip this if you only use the CLI. Plugin and CLI versions are coupled;
+  running this keeps Desktop's plugin aligned with the CLI you just installed.)
+
 ${C_DIM}Full docs: the clauck plugin skill (invoke /clauck:clauck in any CC session)${C_RESET}
 ${C_DIM}Source:    https://github.com/CoreyRDean/clauck${C_RESET}
 

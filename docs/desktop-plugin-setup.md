@@ -24,7 +24,19 @@ Done. Claude Desktop handles the rest natively.
 
 ## Updating
 
-Re-paste the one-liner — Claude Desktop rebuilds the plugin from the latest repo contents. Runtime reconciles on the next SessionStart (or re-run `install.sh` manually).
+Two sides. Update either — the plugin's SessionStart hook detects drift and prints a pointer to the other.
+
+**CoWork plugin side:**
+
+> Pull latest plugins/clauck/ from github.com/CoreyRDean/clauck and build a Cowork .plugin update.
+
+**Host Mac runtime side:** re-run `install.sh` in a Mac terminal:
+
+```bash
+curl -sSL https://raw.githubusercontent.com/CoreyRDean/clauck/main/install.sh | bash
+```
+
+The installer prints the CoWork update prompt in its success banner so you can paste it directly into CoWork without looking it up.
 
 ## Uninstalling
 

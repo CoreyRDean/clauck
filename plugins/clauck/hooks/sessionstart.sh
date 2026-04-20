@@ -89,10 +89,18 @@ mkdir -p "$(dirname "$INSTALL_LOG")" 2>/dev/null || true
 advise_runtime_missing() {
     local reason="$1"
     {
-        echo "clauck plugin: $reason"
-        echo "  Running in CoWork sandbox — can't install on the host from here."
-        echo "  Ask the user to run this on their Mac in a terminal:"
+        echo ""
+        echo "⚠ clauck plugin: $reason"
+        echo "  Running in CoWork sandbox — can't install the runtime on the host from here."
+        echo ""
+        echo "  The user should run this on their Mac in a terminal to install the runtime:"
+        echo ""
         echo "    curl -sSL https://raw.githubusercontent.com/CoreyRDean/clauck/main/install.sh | bash"
+        echo ""
+        echo "  After the runtime is installed, rebuild this CoWork plugin by pasting:"
+        echo ""
+        echo "    Pull latest plugins/clauck/ from github.com/CoreyRDean/clauck and build a Cowork .plugin update."
+        echo ""
     }
 }
 
@@ -177,12 +185,30 @@ if [ -n "$PLUGIN_VERSION" ] && [ -f "$VERSION_FILE" ]; then
        && should_heal_now; then
         date +%s > "$LAST_HEAL_FILE" 2>/dev/null || true
         if [ "$IN_COWORK_SANDBOX" = "1" ]; then
-            # Can't install from the sandbox — just print the advisory.
-            # The current binary still works for this session; the user
-            # can update on the host side at their convenience.
-            echo "clauck plugin: version drift (plugin=${PLUGIN_VERSION}, binary=${BINARY_VERSION_FULL})"
-            echo "  Running in CoWork sandbox; update on the host Mac:"
-            echo "    curl -sSL https://raw.githubusercontent.com/CoreyRDean/clauck/main/install.sh | bash"
+            # Can't install from the sandbox — instruct the agent how to
+            # reconcile. The host clauck binary is reachable via the
+            # mount; the plugin side is updated by re-running CoWork's
+            # plugin-creation flow from the latest repo contents. This
+            # output goes into the agent's context as part of the
+            # SessionStart hook, so an agent reading it will know what
+            # to do next without the user having to paste anything.
+            echo ""
+            echo "⚠ clauck plugin version drift (plugin=${PLUGIN_VERSION}, binary=${BINARY_VERSION_FULL})"
+            if [ "$BINARY_VERSION_SEMVER" \> "$PLUGIN_VERSION" ]; then
+                echo "  The host Mac's clauck CLI is newer than this plugin."
+                echo "  To update this CoWork plugin to match, the user should paste:"
+                echo ""
+                echo "    Pull latest plugins/clauck/ from github.com/CoreyRDean/clauck and build a Cowork .plugin update."
+                echo ""
+            else
+                echo "  This plugin is newer than the host Mac's clauck CLI."
+                echo "  To update the host CLI, the user should run in a Mac terminal:"
+                echo ""
+                echo "    curl -sSL https://raw.githubusercontent.com/CoreyRDean/clauck/main/install.sh | bash"
+                echo ""
+            fi
+            echo "  The current binary still works for this session."
+            echo ""
         else
             run_install_in_background "version drift: plugin=${PLUGIN_VERSION}, binary=${BINARY_VERSION_FULL}"
         fi
