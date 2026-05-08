@@ -156,7 +156,7 @@ def jit_update_check() -> None:
 
 def _notify_pending_auto_reports() -> None:
     """Print a one-line notice if background agents have queued auto-draft reports."""
-    auto_report_mode = load_config().get("auto_report", {}).get("mode", "off")
+    auto_report_mode = _auto_report_mode()
     if auto_report_mode == "off" or not REPORTS_DIR.exists():
         return
     auto_drafts = list(REPORTS_DIR.glob("*-auto.json"))
@@ -184,6 +184,23 @@ def load_config() -> dict:
         except (OSError, ValueError):
             return {}
     return {}
+
+
+def _auto_report_mode(config: "dict | None" = None) -> str:
+    """Return the normalized auto-report mode.
+
+    Tolerates legacy scalar configs such as {"auto_report": "draft"} so old
+    persisted state cannot brick the CLI during startup or report handling.
+    """
+    cfg = config if isinstance(config, dict) else load_config()
+    raw = cfg.get("auto_report", {})
+    if isinstance(raw, str):
+        mode = raw.strip().lower()
+    elif isinstance(raw, dict):
+        mode = str(raw.get("mode", "off")).strip().lower()
+    else:
+        mode = "off"
+    return mode if mode in {"off", "draft", "auto"} else "off"
 
 
 def job_state(name: str) -> dict:
@@ -431,7 +448,7 @@ def cmd_status() -> None:
     print(f"  notifications: {'on' if notif else 'off'} (toggle: clauck config set notifications true/false)")
 
     # Check for pending auto-report drafts
-    auto_report_mode = config.get("auto_report", {}).get("mode", "off")
+    auto_report_mode = _auto_report_mode(config)
     print(f"  auto-report: {auto_report_mode}"
           f" (change: clauck config set auto_report.mode draft|auto|off)")
     if auto_report_mode != "off" and REPORTS_DIR.exists():
@@ -1524,7 +1541,11 @@ def cmd_config(args: list[str]) -> None:
     # Navigate to the nested key
     d = config
     for k in key_path[:-1]:
-        d = d.setdefault(k, {})
+        child = d.get(k)
+        if not isinstance(child, dict):
+            child = {}
+            d[k] = child
+        d = child
     d[key_path[-1]] = value
     CONFIG_FILE.write_text(json.dumps(config, indent=2) + "\n")
     print(f"  set {args[1]} = {value}")
@@ -3670,7 +3691,7 @@ def _write_auto_draft(
     """
     import time as _t
 
-    auto_report_mode = load_config().get("auto_report", {}).get("mode", "off")
+    auto_report_mode = _auto_report_mode()
     if auto_report_mode == "off":
         return None
 

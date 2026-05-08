@@ -267,6 +267,9 @@ class TestWriteAutoDraft(unittest.TestCase):
     def _set_mode(self, mode: str) -> None:
         self.config_file.write_text(json.dumps({"auto_report": {"mode": mode}}))
 
+    def _set_scalar_mode(self, mode: str) -> None:
+        self.config_file.write_text(json.dumps({"auto_report": mode}))
+
     def test_off_mode_returns_none(self):
         self._set_mode("off")
         result = _write_auto_draft("test-agent", "title", "body")
@@ -295,6 +298,12 @@ class TestWriteAutoDraft(unittest.TestCase):
 
     def test_auto_mode_creates_file(self):
         self._set_mode("auto")
+        path = _write_auto_draft("doctor", "A bug", "body")
+        self.assertIsNotNone(path)
+        self.assertTrue(path.exists())
+
+    def test_scalar_draft_mode_creates_file(self):
+        self._set_scalar_mode("draft")
         path = _write_auto_draft("doctor", "A bug", "body")
         self.assertIsNotNone(path)
         self.assertTrue(path.exists())
@@ -369,6 +378,9 @@ class TestNotifyPendingAutoReports(unittest.TestCase):
     def _set_mode(self, mode: str) -> None:
         self.config_file.write_text(json.dumps({"auto_report": {"mode": mode}}))
 
+    def _set_scalar_mode(self, mode: str) -> None:
+        self.config_file.write_text(json.dumps({"auto_report": mode}))
+
     def _capture_notify(self):
         buf = io.StringIO()
         with patch("builtins.print", side_effect=lambda *a, **k: buf.write(" ".join(str(x) for x in a) + "\n")):
@@ -402,6 +414,14 @@ class TestNotifyPendingAutoReports(unittest.TestCase):
         self.assertIn("auto-report", out)
         self.assertIn("clauck report --inbox", out)
 
+    def test_scalar_draft_mode_prints_notice(self):
+        self._set_scalar_mode("draft")
+        self.reports.mkdir()
+        (self.reports / "20260418T120000Z-doctor-auto.json").write_text("{}")
+        out = self._capture_notify()
+        self.assertIn("auto-report", out)
+        self.assertIn("clauck report --inbox", out)
+
     def test_notice_includes_count(self):
         self._set_mode("draft")
         self.reports.mkdir()
@@ -409,3 +429,27 @@ class TestNotifyPendingAutoReports(unittest.TestCase):
             (self.reports / f"20260418T12000{i}Z-doctor-auto.json").write_text("{}")
         out = self._capture_notify()
         self.assertIn("3", out)
+
+
+# ---------------------------------------------------------------------------
+# cmd_config — nested-key recovery for legacy scalar auto_report config
+# ---------------------------------------------------------------------------
+
+
+class TestCmdConfigAutoReportRecovery(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.config_file = Path(self.tmp.name) / "config.json"
+        self._orig_config = _mod.CONFIG_FILE
+        _mod.CONFIG_FILE = self.config_file
+
+    def tearDown(self):
+        _mod.CONFIG_FILE = self._orig_config
+        self.tmp.cleanup()
+
+    def test_set_nested_auto_report_mode_replaces_scalar_parent(self):
+        self.config_file.write_text(json.dumps({"auto_report": "draft"}))
+        with patch("builtins.print"):
+            _mod.cmd_config(["set", "auto_report.mode", "off"])
+        saved = json.loads(self.config_file.read_text())
+        self.assertEqual(saved["auto_report"], {"mode": "off"})
