@@ -4421,7 +4421,12 @@ def main() -> None:
         if "--days" in rest:
             idx = rest.index("--days")
             if idx + 1 < len(rest):
-                h_days = int(rest[idx + 1])
+                try:
+                    h_days = int(rest[idx + 1])
+                except ValueError:
+                    die("--days requires an integer")
+            else:
+                die("--days requires an integer")
             rest = [r for i, r in enumerate(rest) if i != idx and i != idx + 1]
         rest = [r for r in rest if r != "--all"]
         if rest:
