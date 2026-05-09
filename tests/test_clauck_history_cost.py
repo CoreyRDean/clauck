@@ -34,6 +34,20 @@ def _make_log(directory: Path, name: str, ts: str, pid: str, content: str) -> Pa
     return log
 
 
+def _run_main(*args: str) -> tuple[int, str, str]:
+    stdout = io.StringIO()
+    stderr = io.StringIO()
+    with patch.object(sys, "argv", ["clauck", *args]), \
+         patch("sys.stdout", stdout), \
+         patch("sys.stderr", stderr):
+        try:
+            _mod.main()
+            code = 0
+        except SystemExit as exc:
+            code = exc.code if isinstance(exc.code, int) else 1
+    return code, stdout.getvalue(), stderr.getvalue()
+
+
 # ---------------------------------------------------------------------------
 # _parse_log_summary
 # ---------------------------------------------------------------------------
@@ -276,6 +290,33 @@ class TestCmdCost(unittest.TestCase):
         os.utime(log, (sixty_days_ago, sixty_days_ago))
         out = self._run(all_time=True)
         self.assertIn("old-job", out)
+
+
+# ---------------------------------------------------------------------------
+# CLI parsing for `history`
+# ---------------------------------------------------------------------------
+
+class TestHistoryCliParsing(unittest.TestCase):
+
+    def test_history_days_requires_value(self):
+        code, stdout, stderr = _run_main("history", "--days")
+        self.assertEqual(code, 1)
+        self.assertEqual(stdout, "")
+        self.assertIn("error: --days requires an integer", stderr)
+
+    def test_history_days_requires_integer(self):
+        code, stdout, stderr = _run_main("history", "--days", "abc")
+        self.assertEqual(code, 1)
+        self.assertEqual(stdout, "")
+        self.assertIn("error: --days requires an integer", stderr)
+
+    def test_history_days_valid_value_reaches_command(self):
+        with patch.object(_mod, "cmd_history") as mock_history:
+            code, stdout, stderr = _run_main("history", "--days", "7", "heartbeat")
+        self.assertEqual(code, 0)
+        self.assertEqual(stdout, "")
+        self.assertEqual(stderr, "")
+        mock_history.assert_called_once_with("heartbeat", 30, 7, False)
 
 
 if __name__ == "__main__":
