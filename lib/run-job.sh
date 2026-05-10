@@ -473,7 +473,7 @@ fi
 # On subsequent runs, we pass --resume <session_id> so claude has context
 # from all prior runs of this job.
 SESSION_ID_FILE="$STATE_DIR/${JOB_NAME}.session-id"
-if [ "${CLAUDE_JOB_SESSION_PERSIST:-}" = "1" ] && [ -f "$SESSION_ID_FILE" ]; then
+if [ -z "${REVIVE_SESSION_ID:-}" ] && [ "${CLAUDE_JOB_SESSION_PERSIST:-}" = "1" ] && [ -f "$SESSION_ID_FILE" ]; then
   STORED_SID="$(cat "$SESSION_ID_FILE" 2>/dev/null | tr -d '[:space:]')"
   if [ -n "$STORED_SID" ]; then
     CLAUDE_ARGS+=(--resume "$STORED_SID")
@@ -486,9 +486,10 @@ fi
 EXIT_CODE=$?
 
 # --- Stale session-ID retry: if --resume failed, retry without it ---
-# If exit was non-zero, session persistence was active, and the error looks
-# session-related, drop the stale session-id and retry once from scratch.
-if [ "$EXIT_CODE" -ne 0 ] && [ "${CLAUDE_JOB_SESSION_PERSIST:-}" = "1" ] && [ -f "$SESSION_ID_FILE" ]; then
+# If exit was non-zero, session persistence was active, the run was not an
+# explicit revive, and the error looks session-related, drop the stale
+# session-id and retry once from scratch.
+if [ "$EXIT_CODE" -ne 0 ] && [ -z "${REVIVE_SESSION_ID:-}" ] && [ "${CLAUDE_JOB_SESSION_PERSIST:-}" = "1" ] && [ -f "$SESSION_ID_FILE" ]; then
   # Check last ~40 lines of log for session/resume-related error text
   if tail -40 "$LOG_FILE" 2>/dev/null | grep -qi -e "session" -e "resume"; then
     echo "stage=session_retry stale_session_id=$(cat "$SESSION_ID_FILE" 2>/dev/null | tr -d '[:space:]')" >> "$LOG_FILE"

@@ -72,6 +72,8 @@ Examples:
 
 from __future__ import annotations
 
+import importlib.machinery
+import importlib.util
 import json
 import os
 import subprocess
@@ -184,6 +186,72 @@ def load_config() -> dict:
         except (OSError, ValueError):
             return {}
     return {}
+
+
+def _load_scheduler_module():
+    """Load scheduler.py from the dev tree or installed runtime, if present."""
+    candidates = (
+        Path(__file__).resolve().parent / "scheduler.py",
+        JOBS_DIR / "scheduler.py",
+    )
+    for scheduler_path in candidates:
+        if not scheduler_path.exists():
+            continue
+        loader = importlib.machinery.SourceFileLoader(
+            f"clauck_scheduler_{abs(hash(str(scheduler_path)))}",
+            str(scheduler_path),
+        )
+        spec = importlib.util.spec_from_loader(loader.name, loader)
+        if spec is None:
+            continue
+        module = importlib.util.module_from_spec(spec)
+        loader.exec_module(module)
+        return module
+    return None
+
+
+def _discover_job_config(name: str) -> dict | None:
+    """Return the scheduler-resolved config for a job name, if available."""
+    scheduler = _load_scheduler_module()
+    if scheduler is None:
+        return None
+    try:
+        for job in scheduler.discover_jobs():
+            if job.get("name") == name:
+                return job
+    except Exception:
+        return None
+    return None
+
+
+def _build_job_env(job: dict, trigger: str) -> dict[str, str]:
+    """Build the CLAUDE_JOB_* env block expected by run-job.sh."""
+    env = os.environ.copy()
+    env["CLAUDE_JOB_NAME"] = str(job["name"])
+    env["CLAUDE_JOB_PATH"] = str(job["path"])
+    env["CLAUDE_JOB_CWD"] = str(job["cwd"])
+    env["CLAUDE_JOB_MAX_TURNS"] = str(job["max_turns"])
+    env["CLAUDE_JOB_MAX_BUDGET_USD"] = str(job["max_budget_usd"])
+    env["CLAUDE_JOB_EFFORT"] = str(job["effort"])
+    env["CLAUDE_JOB_CRON"] = str(job.get("cron", ""))
+    env["CLAUDE_JOB_MODEL"] = str(job.get("model", ""))
+    ss = job.get("setting_sources")
+    if ss is not None:
+        env["CLAUDE_JOB_SETTING_SOURCES"] = str(ss)
+        env["CLAUDE_JOB_SETTING_SOURCES_SET"] = "1"
+    if job.get("strict_mcp_config"):
+        env["CLAUDE_JOB_STRICT_MCP_CONFIG"] = "1"
+    if job.get("debounce_seconds"):
+        env["CLAUDE_JOB_DEBOUNCE_SECONDS"] = str(job["debounce_seconds"])
+    if job.get("session_persist"):
+        env["CLAUDE_JOB_SESSION_PERSIST"] = "1"
+    if job.get("interactive"):
+        env["CLAUDE_JOB_INTERACTIVE"] = "1"
+    if job.get("trace_tool_calls"):
+        env["CLAUDE_JOB_TRACE_TOOL_CALLS"] = "1"
+    env["CLAUDE_JOB_TRIGGER"] = trigger
+    env["CLAUDE_JOB_FIRED_AT"] = datetime.now(timezone.utc).isoformat()
+    return env
 
 
 def job_state(name: str) -> dict:
@@ -1696,6 +1764,7 @@ def cmd_revive(name: str, budget: float | None = None, turns: int | None = None)
     orig_turns = stone.get("orig_max_turns", 50)
     trip_reason = stone.get("trip_reason", "?")
     spend = stone.get("spend_usd")
+    job_config = _discover_job_config(name)
 
     new_budget = budget if budget is not None else round(orig_budget * 2, 2)
     new_turns = turns if turns is not None else orig_turns * 2
@@ -1722,15 +1791,16 @@ def cmd_revive(name: str, budget: float | None = None, turns: int | None = None)
     # Fetch current consumers from the manifest so the revived job can chain them
     # (only used on the solo-revive fallback path; during DAG resume, dag-runner.py
     # handles consumer delivery as it completes remaining layers).
-    consumers: list[str] = []
-    try:
-        m = load_manifest()
-        for j in m.get("jobs", []):
-            if j.get("name") == name:
-                consumers = list(j.get("consumers", []))
-                break
-    except Exception:
-        pass
+    consumers = list(job_config.get("consumers", [])) if job_config else []
+    if not consumers:
+        try:
+            m = load_manifest()
+            for j in m.get("jobs", []):
+                if j.get("name") == name:
+                    consumers = list(j.get("consumers", []))
+                    break
+        except Exception:
+            pass
 
     spend_str = f"${spend:.4f}" if spend is not None else "unknown"
     print(f"  reviving '{name}' as background job (tripped: {trip_reason}, spent: {spend_str})")
@@ -1786,9 +1856,19 @@ def cmd_revive(name: str, budget: float | None = None, turns: int | None = None)
         # Solo revive: bypass scheduler.py --trigger (which would re-run producers
         # on pipeline nodes); run this single node non-interactively and let
         # run-job.sh chain directly-declared consumers on success.
+        env = (
+            _build_job_env(job_config, "revive")
+            if job_config is not None
+            else {
+                **os.environ,
+                "CLAUDE_JOB_NAME": name,
+                "CLAUDE_JOB_TRIGGER": "revive",
+                "CLAUDE_JOB_FIRED_AT": datetime.now(timezone.utc).isoformat(),
+            }
+        )
         subprocess.Popen(
             ["zsh", str(run_job), name],
-            env={**os.environ, "CLAUDE_JOB_TRIGGER": "revive"},
+            env=env,
             stdin=subprocess.DEVNULL,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
