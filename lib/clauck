@@ -2660,12 +2660,7 @@ def _parse_interpreter_result(
     routing: dict = {}
     interpreter_error = ""
 
-    envelope: dict = {}
-    if result.stdout and result.stdout.strip():
-        try:
-            envelope = json.loads(result.stdout)
-        except (json.JSONDecodeError, ValueError):
-            pass
+    envelope = _extract_json_envelope(result.stdout)
 
     if result.returncode == 0 and envelope:
         inner = envelope.get("result", "").strip()
@@ -2698,6 +2693,98 @@ def _parse_interpreter_result(
         interpreter_error = "interpreter produced no output"
 
     return routing, interpreter_error
+
+
+def _extract_json_envelope(text: str | None) -> dict:
+    """Return the most relevant JSON envelope from Claude stdout text."""
+    if not text or not text.strip():
+        return {}
+    stripped = text.strip()
+    try:
+        parsed = json.loads(stripped)
+        if isinstance(parsed, dict):
+            return parsed
+    except (json.JSONDecodeError, ValueError):
+        pass
+
+    for line in reversed(stripped.splitlines()):
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            parsed = json.loads(line)
+        except (json.JSONDecodeError, ValueError):
+            continue
+        if isinstance(parsed, dict):
+            return parsed
+    return {}
+
+
+def _run_json_cli(
+    argv: list[str],
+    *,
+    terminal_wait_seconds: float = 5.0,
+    kill_wait_seconds: float = 5.0,
+) -> "subprocess.CompletedProcess[str]":
+    """Run a JSON-emitting CLI without hanging forever after terminal output."""
+    import threading
+
+    proc = subprocess.Popen(
+        argv,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        bufsize=1,
+    )
+    stdout_parts: list[str] = []
+    stderr_parts: list[str] = []
+    terminal_seen = threading.Event()
+
+    def _drain_stdout() -> None:
+        assert proc.stdout is not None
+        for line in proc.stdout:
+            stdout_parts.append(line)
+            if _extract_json_envelope(line):
+                terminal_seen.set()
+        proc.stdout.close()
+
+    def _drain_stderr() -> None:
+        assert proc.stderr is not None
+        for line in proc.stderr:
+            stderr_parts.append(line)
+        proc.stderr.close()
+
+    out_thread = threading.Thread(target=_drain_stdout, daemon=True)
+    err_thread = threading.Thread(target=_drain_stderr, daemon=True)
+    out_thread.start()
+    err_thread.start()
+
+    try:
+        while proc.poll() is None:
+            if terminal_seen.wait(timeout=0.1):
+                break
+
+        if terminal_seen.is_set() and proc.poll() is None:
+            try:
+                proc.wait(timeout=terminal_wait_seconds)
+            except subprocess.TimeoutExpired:
+                proc.terminate()
+                try:
+                    proc.wait(timeout=kill_wait_seconds)
+                except subprocess.TimeoutExpired:
+                    proc.kill()
+                    proc.wait(timeout=kill_wait_seconds)
+        returncode = proc.wait()
+    finally:
+        out_thread.join(timeout=1.0)
+        err_thread.join(timeout=1.0)
+
+    return subprocess.CompletedProcess(
+        argv,
+        returncode,
+        "".join(stdout_parts),
+        "".join(stderr_parts),
+    )
 
 
 def _log_interpreter_failure(
@@ -4192,7 +4279,7 @@ def cmd_semantic(text: str) -> None:
         # Use Sonnet for reliability — Haiku was generating explanatory prose
         # instead of strict JSON on edge cases. Cost increase is marginal
         # (~$0.03-0.05 vs $0.01) and the reliability is worth it.
-        result_s1 = subprocess.run(
+        result_s1 = _run_json_cli(
             [claude_bin, "-p", user_prompt,
              "--append-system-prompt", interpreter_prompt,
              "--model", "sonnet",
@@ -4202,7 +4289,6 @@ def cmd_semantic(text: str) -> None:
              "--setting-sources", "",
              "--strict-mcp-config",
              "--mcp-config", str(empty_mcp)],
-            capture_output=True, text=True,
         )
     except Exception:
         spinner_running[0] = False
@@ -4334,7 +4420,7 @@ def cmd_semantic(text: str) -> None:
     })
 
     try:
-        result = subprocess.run(
+        result = _run_json_cli(
             [claude_bin, "-p", enhanced_prompt,
              "--append-system-prompt", system_prompt,
              "--dangerously-skip-permissions",
@@ -4346,17 +4432,13 @@ def cmd_semantic(text: str) -> None:
              "--effort", exec_effort,
              "--output-format", "json",
              "--setting-sources", ""],
-            capture_output=True, text=True,
         )
     finally:
         spinner_running[0] = False
         spin_thread.join(timeout=0.5)
 
     # Parse Claude's JSON envelope
-    try:
-        envelope = json.loads(result.stdout) if result.stdout else {}
-    except (json.JSONDecodeError, ValueError):
-        envelope = {}
+    envelope = _extract_json_envelope(result.stdout)
 
     is_error = envelope.get("is_error", result.returncode != 0)
     claude_result = envelope.get("result", "").strip()
