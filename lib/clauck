@@ -3492,15 +3492,9 @@ def _find_claude() -> str | None:
 def _build_interpreter_prompt() -> str:
     """Build the stage-1 interpreter system prompt with live manifest data.
 
-    KNOWN COMPLIANCE GAP vs INTENT.md §4 (Cost transparency, v2): the
-    semantic interpreter still emits exec_model/exec_effort/exec_max_turns/
-    exec_max_budget_usd directly in its routing JSON, rather than a
-    task_complexity_scale that Python derives from. The doctor interpreter
-    was migrated to the scale-only contract in this release; the semantic
-    path is tracked for migration before v3 of the INTENT contract. The
-    job-creation guidance inside this prompt already directs created jobs
-    to use `complexity:` in frontmatter, so the gap is only the
-    interpreter's OWN stage-2 sizing, not the jobs it creates.
+    Emits only task_complexity_scale for semantic routes. Python derives
+    model/effort/turns/budget from lib/sizing.py so cost math stays in one
+    audited place instead of being reimplemented in prompt text.
     """
     subcommands = (
         "list, status, fire, pause, resume, edit, logs, marketplace, install, "
@@ -3557,35 +3551,17 @@ def _build_interpreter_prompt() -> str:
 
 # Sizing the semantic execution (for command_type="semantic")
 
-Reason from the specific request, not from tiers. Every invocation has a different shape.
+Emit ONLY `task_complexity_scale` (float 0.0-1.0) for semantic routes. Do NOT emit model, effort, max_turns, or budget fields. Python derives those from `lib/sizing.py`.
 
-**Cost anchors** (approximate):
-- haiku: $1/M input, $5/M output, fast. Good for status queries, lookups, pure-reasoning tasks with small context.
-- sonnet: $3/M input, $15/M output. Good for anything that requires synthesis, code authoring, multi-file work.
-- opus: $15/M input, $75/M output. Reach for this only when deep reasoning across tangled code or architecture is unavoidable.
-- Tool-chain turn with tool calls + reasoning overhead: ~$0.02 on haiku, ~$0.08 on sonnet, ~$0.40 on opus.
+Choose the smallest honest scale that fits the request:
+- **0.10** — trivial state check, one quick lookup, list/filter.
+- **0.25** — focused single-surface task or one small job edit.
+- **0.40** — routine multi-source synthesis or moderate job creation/editing.
+- **0.55** — investigation across logs/state/config or multi-file reasoning.
+- **0.75** — DAG/module work, cross-subsystem audit, careful multi-step changes.
+- **0.95** — deep architectural reasoning or unusually tangled debugging.
 
-**Sizing dimensions:**
-- Read cost: how many files must the session open? How large are they? Manifest is ~1KB; a single job .md is ~3–6KB; a log can be hundreds of KB.
-- Write cost: how much new code/config will the session produce? 50 lines is small; 500 lines of new job scaffolding is not.
-- Reasoning depth: can the agent answer after one read, or must it synthesize across multiple files? Multi-step reasoning needs sonnet.
-- Verification: does the request include "make sure it works" or "test it"? Add turns for re-reading and validating.
-
-**Model selection heuristics (not rules):**
-- Status query, single lookup, list-and-filter → haiku is usually enough.
-- Create/modify a single job, answer a code question from context → sonnet.
-- Multi-file refactor, DAG wiring, module creation with internal stages, anything requiring careful cross-referencing → sonnet at high effort.
-- Genuinely architectural decisions or tricky debugging with many unknowns → opus, sparingly.
-
-**Turns and budget:**
-- Turns = roughly (reads + writes + verifications) × 1.3 for reasoning overhead.
-- Budget = sum of per-turn cost estimates × 1.3 for headroom. Hitting the budget ceiling truncates output; one that runs a few cents over is fine.
-- A session that lands at 60% of its budget ceiling did it right. 100% is too tight.
-
-**Hard floors and ceilings** (guardrails, not targets):
-- Minimum: 3 turns, $0.05, haiku.
-- Maximum: 60 turns, $3.00, sonnet (or opus if genuinely warranted).
-- Above the ceiling, reconsider the request — suggest breaking into multiple invocations in the interpretation field.
+Interpolate between anchors. Base the scale on read cost, write cost, reasoning depth, and verification load. The execution agent may still run on a larger model if MCP context makes haiku unsafe; your job is only to estimate task complexity honestly.
 
 # When the execution will CREATE or EDIT a job file — use `complexity:` in the frontmatter
 
@@ -3647,7 +3623,7 @@ For deterministic:
 Single-string `deterministic_cmd` is still accepted for simple cases (`"clauck list"`, `"clauck fire jobA"`), parsed with shell-style quoting. Prefer `deterministic_argv` by default — it cannot be misparsed.
 
 For semantic:
-{{"command_type": "semantic", "interpretation": "<distilled CLI directive>", "enhanced_prompt": "<prescriptive task brief>", "exec_model": "haiku"|"sonnet"|"opus", "exec_effort": "low"|"medium"|"high", "exec_max_turns": <int>, "exec_max_budget_usd": <float>}}"""
+{{"command_type": "semantic", "interpretation": "<distilled CLI directive>", "enhanced_prompt": "<prescriptive task brief>", "task_complexity_scale": <float 0.0-1.0>}}"""
 
 
 SEMANTIC_EXEC_SYSTEM_PROMPT = """You are the clauck CLI executing a user's natural-language command.
@@ -4386,10 +4362,7 @@ def cmd_semantic(text: str) -> None:
             "command_type": "semantic",
             "interpretation": "(interpreter failed — raw request passed through)",
             "enhanced_prompt": text,
-            "exec_model": "sonnet",
-            "exec_effort": "medium",
-            "exec_max_turns": 15,
-            "exec_max_budget_usd": 0.50,
+            "task_complexity_scale": 0.40,
         }
 
     interpretation = routing.get("interpretation", text)
@@ -4452,18 +4425,32 @@ def cmd_semantic(text: str) -> None:
             die(f"could not parse deterministic command: argv={argv!r} cmd={routing.get('deterministic_cmd', '')!r}")
         return
 
-    # semantic path — run execution pass with interpreter-chosen parameters
+    # semantic path — derive execution parameters from the shared sizing formula
     # Temporarily pause spinner to print interpretation, then resume with new label
     spinner_running[0] = False
     spin_thread.join(timeout=0.5)
     print(f"  \u2192 {interpretation}")
-    print(f"  {'─' * 60}")
-
-    exec_model = routing.get("exec_model", "sonnet")
-    exec_effort = routing.get("exec_effort", "medium")
-    exec_max_turns = str(routing.get("exec_max_turns", 15))
-    exec_max_budget = str(routing.get("exec_max_budget_usd", 0.50))
     enhanced_prompt = routing.get("enhanced_prompt", text)
+    semantic_cfg = sizing.load_doctor_config()
+    raw_scale = routing.get("task_complexity_scale")
+    if raw_scale is None:
+        raw_scale = routing.get("scale")
+    try:
+        scale = float(raw_scale) if raw_scale is not None else 0.40
+    except (TypeError, ValueError):
+        scale = 0.40
+    sized = sizing.compute_sizing(
+        scale,
+        sizing.estimate_tokens(enhanced_prompt or ""),
+        semantic_cfg,
+        strict_mcp=False,
+    )
+    exec_model = sized["model"]
+    exec_effort = sized["effort"]
+    exec_max_turns = str(sized["max_turns"])
+    exec_max_budget = str(sized["max_budget_usd"])
+    print(f"  \u2192 {sized['explanation']}")
+    print(f"  {'─' * 60}")
 
     system_prompt = SEMANTIC_EXEC_SYSTEM_PROMPT.replace("{JOBS_DIR}", str(JOBS_DIR))
     system_prompt = system_prompt.replace("{MANIFEST}", str(MANIFEST))

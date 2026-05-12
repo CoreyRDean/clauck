@@ -1,6 +1,6 @@
 # INTENT
 
-**Version:** v2
+**Version:** v3
 **Status:** Adopted
 **Scope:** Binds the `CoreyRDean/clauck` upstream repository. Revised only by PR amending this file.
 
@@ -91,7 +91,7 @@ Every job carries traceable provenance — a `source:` block tracking where the 
 
 Non-negotiable #4 says cost is a first-class surface. This property specifies *how*. Every Claude session clauck runs — doctor invocations, scheduled jobs (flat, module-anchor, module-stage), marketplace-installed jobs — derives its sizing (`model`, `effort`, `max_turns`, `max_budget_usd`) from a single shared formula keyed on a declared **complexity scale**, not from ad-hoc guessing at each site. The formula is visible in one file (`lib/sizing.py`), configurable per-user (`~/.clauck/.clauck.config.json` under `doctor`), introspectable by humans and agents (`clauck size <scale>`, `clauck inspect <job>`), and self-correcting (doctor bumps `scale_skew` on budget truncation, decays on clean runs). Clamps are visibly surfaced, not silent. A feature that does its own sizing math outside this pipeline, hides cost from the user, or sets a budget the user cannot audit violates this property. Parallel cost/sizing logic anywhere else in the codebase is a red flag — either the formula is wrong (fix the formula) or the feature shouldn't exist.
 
-**Scope of compliance at v2 adoption**: doctor, scheduler, CLI surfaces (`clauck size`, `clauck validate`, `clauck inspect`), and all marketplace jobs are fully compliant. The natural-language semantic interpreter (`clauck <anything>`, `clauck work <text>`) still emits its own stage-2 execution params directly — a known compliance gap tracked for follow-up. Job-creation guidance inside the semantic path already directs Claude to emit `complexity:` in any new job frontmatter, so the gap is only at the interpreter's own stage-2 sizing, not in the jobs it creates. This does not retroactively reshape the property — the claim above stands for all sites named in it — but the semantic path must be migrated before v3.
+**Scope of compliance at v3 adoption**: doctor, scheduler, CLI surfaces (`clauck size`, `clauck validate`, `clauck inspect`), marketplace jobs, and the natural-language semantic interpreter (`clauck <anything>`, `clauck work <text>`) all derive stage-2 execution parameters from the shared complexity-scale formula in `lib/sizing.py`. Job-creation guidance inside the semantic path continues to direct new jobs toward `complexity:` in frontmatter, so both scheduled execution and natural-language dispatch now speak the same cost contract.
 
 ---
 

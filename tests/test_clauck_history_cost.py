@@ -225,9 +225,11 @@ class TestCmdCost(unittest.TestCase):
         self.assertGreater(cheap_pos, expensive_pos, "expensive job should appear before cheap job")
 
     def test_total_row_present_for_multiple_jobs(self):
+        now = datetime.now(timezone.utc)
         for i, cost in enumerate(["0.0100", "0.0200"]):
+            ts = (now - timedelta(days=i)).strftime("%Y%m%dT%H%M%SZ")
             self._log(
-                f"job-{i}", f"2026041{i}T170000Z", str(i + 1),
+                f"job-{i}", ts, str(i + 1),
                 f'{{"total_cost_usd":{cost}}}\n{{"terminal_reason":"completed"}}\n--- exit_code=0 ---\n',
             )
         out = self._run()
