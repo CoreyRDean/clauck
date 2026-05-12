@@ -561,17 +561,14 @@ class TestEvalFileAdded(unittest.TestCase):
         self.assertTrue(new_state["pending_burst"])
 
     def test_removed_file_can_refire(self):
-        # Full lifecycle: add file → delete it → re-add → burst fires again.
-        # Tick 1: file present in both seen and current — no burst.
+        # Full lifecycle: add file -> delete it -> re-add -> burst fires again.
         self._touch("cycle.txt")
         state = {"seen_files": ["cycle.txt"], "pending_burst": False, "last_change_at": None}
         state1, _ = scheduler._eval_file_added(self._trig(), state)
         self.assertFalse(state1["pending_burst"])
-        # Tick 2: file deleted — seen &= current strips it from seen.
         os.unlink(os.path.join(self.tmpdir, "cycle.txt"))
         state2, _ = scheduler._eval_file_added(self._trig(), state1)
         self.assertNotIn("cycle.txt", state2["seen_files"])
-        # Tick 3: file re-added — detected as new, burst starts.
         self._touch("cycle.txt")
         state3, fired3 = scheduler._eval_file_added(self._trig(), state2)
         self.assertFalse(fired3)
@@ -771,6 +768,112 @@ class TestSubstituteBashTemplates(unittest.TestCase):
         body, log = scheduler.substitute_bash_templates("{{cmd: exit 42}}")
         self.assertIn("exit 42", body)
         self.assertIn("[cmd-error:", body)
+
+
+# ---------------------------------------------------------------------------
+# _cleanup_stale_tombstones
+# ---------------------------------------------------------------------------
+
+
+class _CleanupFixture:
+    """Context manager that redirects JOBS_DIR to a temp directory."""
+
+    def __enter__(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self._root = Path(self._tmp.name)
+        self._broken = self._root / ".broken"
+        self._dag_inv = self._root / ".state" / ".dag-invocations"
+        self._broken.mkdir(parents=True)
+        self._dag_inv.mkdir(parents=True)
+        self._patches = [
+            patch.object(scheduler, "JOBS_DIR", self._root),
+        ]
+        for p in self._patches:
+            p.start()
+        return self
+
+    def __exit__(self, *_):
+        for p in self._patches:
+            p.stop()
+        self._tmp.cleanup()
+
+    def write_stale(self, subdir: Path, name: str, age_seconds: int = 3 * 3600 + 1) -> Path:
+        p = subdir / name
+        p.write_text("{}")
+        mtime = time_module.time() - age_seconds
+        os.utime(p, (mtime, mtime))
+        return p
+
+    def write_fresh(self, subdir: Path, name: str) -> Path:
+        p = subdir / name
+        p.write_text("{}")
+        return p
+
+    @property
+    def broken(self) -> Path:
+        return self._broken
+
+    @property
+    def dag_inv(self) -> Path:
+        return self._dag_inv
+
+
+class TestCleanupStaleTombstones(unittest.TestCase):
+    def test_removes_stale_tombstone(self):
+        with _CleanupFixture() as fix:
+            stale = fix.write_stale(fix.broken, "job-a.json")
+            scheduler._cleanup_stale_tombstones(retention_hours=1)
+            self.assertFalse(stale.exists())
+
+    def test_leaves_fresh_tombstone(self):
+        with _CleanupFixture() as fix:
+            fresh = fix.write_fresh(fix.broken, "job-b.json")
+            scheduler._cleanup_stale_tombstones(retention_hours=1)
+            self.assertTrue(fresh.exists())
+
+    def test_removes_stale_dag_invocation_state(self):
+        with _CleanupFixture() as fix:
+            stale = fix.write_stale(fix.dag_inv, "inv-abc.json")
+            scheduler._cleanup_stale_tombstones(retention_hours=1)
+            self.assertFalse(stale.exists())
+
+    def test_leaves_fresh_dag_invocation_state(self):
+        with _CleanupFixture() as fix:
+            fresh = fix.write_fresh(fix.dag_inv, "inv-xyz.json")
+            scheduler._cleanup_stale_tombstones(retention_hours=1)
+            self.assertTrue(fresh.exists())
+
+    def test_handles_missing_broken_dir(self):
+        with _CleanupFixture() as fix:
+            fix.broken.rmdir()
+            try:
+                scheduler._cleanup_stale_tombstones(retention_hours=1)
+            except Exception as exc:
+                self.fail(f"raised unexpectedly with missing .broken dir: {exc}")
+
+    def test_handles_missing_dag_invocations_dir(self):
+        with _CleanupFixture() as fix:
+            shutil.rmtree(fix.dag_inv)
+            try:
+                scheduler._cleanup_stale_tombstones(retention_hours=1)
+            except Exception as exc:
+                self.fail(f"raised unexpectedly with missing .dag-invocations dir: {exc}")
+
+    def test_cleans_both_dirs_in_same_run(self):
+        with _CleanupFixture() as fix:
+            stale_t = fix.write_stale(fix.broken, "job-c.json")
+            stale_d = fix.write_stale(fix.dag_inv, "inv-def.json")
+            scheduler._cleanup_stale_tombstones(retention_hours=1)
+            self.assertFalse(stale_t.exists())
+            self.assertFalse(stale_d.exists())
+
+    def test_mixed_stale_and_fresh_in_same_dir(self):
+        with _CleanupFixture() as fix:
+            stale = fix.write_stale(fix.broken, "old-job.json")
+            fresh = fix.write_fresh(fix.broken, "new-job.json")
+            scheduler._cleanup_stale_tombstones(retention_hours=1)
+            self.assertFalse(stale.exists())
+            self.assertTrue(fresh.exists())
 
 
 if __name__ == "__main__":
