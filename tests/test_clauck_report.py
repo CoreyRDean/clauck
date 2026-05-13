@@ -182,12 +182,30 @@ class TestInstallIssueWatcher(unittest.TestCase):
         name = _install_issue_watcher(url)
         self.assertIn("99", name)
 
+    def test_same_repo_keeps_stable_name(self):
+        url = "https://github.com/acme/widget/issues/42"
+        self.assertEqual(_install_issue_watcher(url), _install_issue_watcher(url))
+
     def test_job_file_contains_issue_url(self):
         url = "https://github.com/acme/widget/issues/7"
         name = _install_issue_watcher(url)
         job = Path(self.tmp.name) / f"{name}.md"
         content = job.read_text()
         self.assertIn(url, content)
+
+    def test_repo_hash_prevents_dash_slash_collision(self):
+        left = _install_issue_watcher("https://github.com/acme/x-y/issues/42")
+        right = _install_issue_watcher("https://github.com/acme-x/y/issues/42")
+        self.assertNotEqual(left, right)
+        self.assertTrue((Path(self.tmp.name) / f"{left}.md").exists())
+        self.assertTrue((Path(self.tmp.name) / f"{right}.md").exists())
+
+    def test_repo_hash_prevents_dot_collision(self):
+        left = _install_issue_watcher("https://github.com/acme/re.po/issues/42")
+        right = _install_issue_watcher("https://github.com/acme-re/po/issues/42")
+        self.assertNotEqual(left, right)
+        self.assertTrue((Path(self.tmp.name) / f"{left}.md").exists())
+        self.assertTrue((Path(self.tmp.name) / f"{right}.md").exists())
 
     def test_job_file_has_valid_cron(self):
         url = "https://github.com/acme/widget/issues/7"

@@ -3738,6 +3738,7 @@ After each check, write current state to `~/.clauck/.state/<job-name>.json`:
 
 def _install_issue_watcher(issue_url: str, notify_channel: str = "") -> str:
     """Install a watcher job for a GitHub issue. Returns the job name."""
+    import hashlib
     import re as _re
 
     m = _re.search(r"github\.com/([^/]+/[^/]+)/issues/(\d+)", issue_url)
@@ -3747,7 +3748,8 @@ def _install_issue_watcher(issue_url: str, notify_channel: str = "") -> str:
     number = m.group(2)
 
     slug = _re.sub(r"[^a-z0-9]+", "-", repo.lower()).strip("-")
-    job_name = f"gh-watch-{slug}-{number}"
+    repo_hash = hashlib.sha1(repo.lower().encode("utf-8")).hexdigest()[:8]
+    job_name = f"gh-watch-{slug}-{number}-{repo_hash}"
     job_path = JOBS_DIR / f"{job_name}.md"
 
     notify_default = notify_channel or ""
