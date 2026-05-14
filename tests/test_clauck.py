@@ -2,7 +2,7 @@
 
 Covers: _format_age, _tombstone_age_hours, _list_tombstones, _find_tombstone.
 
-Run: python3 -m pytest tests/test_clauck.py
+Run: python3 -m unittest tests.test_clauck
 """
 
 from __future__ import annotations

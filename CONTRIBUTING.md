@@ -47,15 +47,19 @@ The installer uses the local `lib/`, `jobs/`, and `skill/` directories when it d
 
 1. Fork the repo and create a feature branch from `main`.
 2. Make your changes. Run the installer from your checkout to verify.
-3. If you touched `scheduler.py`, run the parser + evaluator tests:
+3. Run the unit suite:
+   ```bash
+   /usr/bin/python3 -m unittest discover tests -v
+   ```
+4. If you touched `scheduler.py`, run the parser + evaluator tests:
    ```bash
    /usr/bin/python3 -c "import ast; ast.parse(open('lib/scheduler.py').read())" && echo OK
    ```
-4. If you touched `install.sh` or `uninstall.sh`, syntax-check:
+5. If you touched `install.sh` or `uninstall.sh`, syntax-check:
    ```bash
    bash -n install.sh && bash -n uninstall.sh && echo OK
    ```
-5. Open a PR against `main`. Describe what changed and why.
+6. Open a PR against `main`. Describe what changed and why.
 
 ### PR checklist
 

@@ -7,7 +7,7 @@ the clauck CLI has no runtime dependency on lib/scheduler.py). Testing them
 independently catches divergence from the scheduler implementation and
 regression-proofs the output of `clauck next`.
 
-Run: python3 -m pytest tests/test_clauck_cron.py
+Run: python3 -m unittest tests.test_clauck_cron
 """
 
 from __future__ import annotations
