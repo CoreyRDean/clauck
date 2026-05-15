@@ -96,6 +96,7 @@ finally:
 
 HOME = Path(os.environ.get("HOME", str(Path.home())))
 JOBS_DIR = HOME / ".clauck"
+DAG_LOGS_DIR = JOBS_DIR / ".dag-logs"
 STATE_DIR = JOBS_DIR / ".state"
 BROKEN_DIR = JOBS_DIR / ".broken"
 MANIFEST = JOBS_DIR / ".manifest.json"
@@ -542,16 +543,6 @@ def cmd_cost(name: str = "", days: int = 30, all_time: bool = False) -> None:
     now = datetime.now(timezone.utc)
     cutoff = None if all_time else now - timedelta(days=days)
 
-    # Load known job names once so we can tell apart a DAG orchestration log
-    # (e.g. standup-dag-<ts>.log, where standup is a real job) from a log
-    # produced by a job that happens to be named foo-dag.
-    known_jobs: "set[str]" = set()
-    if MANIFEST.exists():
-        try:
-            known_jobs = {j["name"] for j in json.loads(MANIFEST.read_text()).get("jobs", [])}
-        except (ValueError, KeyError):
-            pass
-
     stats: dict[str, dict] = {}
 
     for log_file in JOBS_DIR.glob("*-[0-9]*T[0-9]*Z-[0-9]*.log"):
@@ -559,10 +550,6 @@ def cmd_cost(name: str = "", days: int = 30, all_time: bool = False) -> None:
         if not m:
             continue
         job_name, ts_str = m.group(1), m.group(2)
-        # Skip DAG orchestration logs only when the -dag suffix is not itself a
-        # real job name — a job named e.g. "standup-dag" should not be excluded.
-        if job_name.endswith("-dag") and job_name not in known_jobs:
-            continue
         if name and job_name != name:
             continue
         try:
@@ -959,14 +946,14 @@ def _active_log(name: str) -> "Path | None":
 def _active_dag_log(name: str) -> "Path | None":
     """Return the currently-running DAG orchestration log for *name*, or None.
 
-    DAG logs: ~/.clauck/<name>-dag-<ts>-<pid>.log
+    DAG logs: ~/.clauck/.dag-logs/<name>-<ts>-<pid>.log
     Active detection: most recent log without an exit_code tombstone whose
     pid= header line refers to a live process.
     """
     import os as _os
 
     logs = sorted(
-        JOBS_DIR.glob(f"{name}-dag-[0-9]*.log"),
+        DAG_LOGS_DIR.glob(f"{name}-[0-9]*.log"),
         key=lambda p: p.stat().st_mtime,
         reverse=True,
     )
@@ -1071,7 +1058,7 @@ def cmd_logs(name: str, last: int = 5, show: int = 0, follow: bool = False) -> N
         # pipeline timeline — none of which appears in a single node's log.
         dag_active = _active_dag_log(name)
         dag_logs = sorted(
-            JOBS_DIR.glob(f"{name}-dag-[0-9]*.log"),
+            DAG_LOGS_DIR.glob(f"{name}-[0-9]*.log"),
             key=lambda p: p.stat().st_mtime,
             reverse=True,
         )
@@ -1168,16 +1155,6 @@ def cmd_history(
     all_time: bool = False,
 ) -> None:
     """Cross-job invocation timeline sorted by most recent first."""
-    import re as _re
-
-    # Load known job names so -dag-suffix logs from real jobs named foo-dag
-    # are not misclassified as DAG orchestration logs.
-    known_jobs: "set[str]" = set()
-    if MANIFEST.exists():
-        try:
-            known_jobs = {j["name"] for j in json.loads(MANIFEST.read_text()).get("jobs", [])}
-        except (ValueError, KeyError):
-            pass
 
     # Glob all log files, sorted newest first by mtime
     logs = sorted(JOBS_DIR.glob("*-[0-9]*.log"), key=lambda p: p.stat().st_mtime, reverse=True)
@@ -1189,11 +1166,6 @@ def cmd_history(
 
     summaries = []
     for log in logs:
-        # Skip DAG orchestration logs — they describe pipeline coordination, not
-        # job runs. But don't skip logs from a real job named foo-dag.
-        m_dag = _re.search(r"^(.+)-dag-\d{8}T\d{6}Z-\d+\.log$", log.name)
-        if m_dag and m_dag.group(1) + "-dag" not in known_jobs:
-            continue
         if cutoff_mtime and log.stat().st_mtime < cutoff_mtime:
             # Logs are sorted newest-first; once we go past the cutoff we're done
             break
@@ -1920,6 +1892,7 @@ def cmd_peek() -> None:
         def watch_new_logs():
             while True:
                 current = set(glob.glob(str(JOBS_DIR / "*-[0-9]*.log")))
+                current.update(glob.glob(str(DAG_LOGS_DIR / "*-[0-9]*.log")))
                 new = current - seen_files
                 for f in sorted(new):
                     seen_files.add(f)
@@ -3040,7 +3013,7 @@ Priority order — not a mandatory checklist:
 4. **Manifest errors** — read `{MANIFEST}` and check for `dag_errors` key (cycle detection or missing-producer errors).
 5. **Auto-disabled jobs** — `ls {STATE_DIR}/*.auto-disabled 2>/dev/null`; read each file for the reason.
 6. **Recent failures** — scan `{JOBS_DIR}/*.log` for recent non-zero exit_code tombstones.
-7. **DAG invocation logs** — `{JOBS_DIR}/*-dag-*.log` for pipeline failures.
+7. **DAG invocation logs** — `{DAG_LOGS_DIR}/*.log` for pipeline failures.
 8. **Frontmatter errors** — parse each job .md; report malformed YAML.
 9. **Version / update state** — `cat {JOBS_DIR}/.version` and `{STATE_DIR}/.update-available` if present.
 

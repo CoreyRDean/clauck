@@ -181,11 +181,19 @@ class TestCmdCost(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.jobs_dir = Path(self.tmp.name)
+        self.dag_logs_dir = self.jobs_dir / ".dag-logs"
+        self.dag_logs_dir.mkdir()
         self._orig = _mod.JOBS_DIR
+        self._orig_dag_logs = getattr(_mod, "DAG_LOGS_DIR", None)
         _mod.JOBS_DIR = self.jobs_dir
+        _mod.DAG_LOGS_DIR = self.dag_logs_dir
 
     def tearDown(self):
         _mod.JOBS_DIR = self._orig
+        if self._orig_dag_logs is None:
+            delattr(_mod, "DAG_LOGS_DIR")
+        else:
+            _mod.DAG_LOGS_DIR = self._orig_dag_logs
         self.tmp.cleanup()
 
     def _log(self, name: str, ts: str, pid: str, content: str) -> Path:
@@ -258,13 +266,26 @@ class TestCmdCost(unittest.TestCase):
         self.assertIn("1", out)
 
     def test_dag_log_excluded(self):
-        # A "-dag-" pattern in the filename marks orchestration logs
-        dag_log = self.jobs_dir / "my-pipeline-dag-20260418T170000Z-400.log"
+        dag_log = self.dag_logs_dir / "my-pipeline-20260418T170000Z-400.log"
         dag_log.write_text(
             '{"total_cost_usd":9.9999}\n{"terminal_reason":"completed"}\n--- exit_code=0 ---\n'
         )
         out = self._run()
         self.assertIn("no log data found", out)
+
+    def test_real_dash_dag_job_is_not_polluted_by_dag_root_log(self):
+        self._log(
+            "standup-dag", "20260418T170000Z", "410",
+            '{"total_cost_usd":0.1250}\n{"terminal_reason":"completed"}\n--- exit_code=0 ---\n',
+        )
+        dag_log = self.dag_logs_dir / "standup-20260418T170500Z-411.log"
+        dag_log.write_text(
+            '{"total_cost_usd":9.9999}\n{"terminal_reason":"completed"}\n--- exit_code=0 ---\n'
+        )
+        out = self._run(name="standup-dag", all_time=True)
+        self.assertIn("standup-dag", out)
+        self.assertIn("0.1250", out)
+        self.assertNotIn("9.9999", out)
 
     def test_days_filter_excludes_old_log(self):
         # Log timestamped 60 days ago — outside default 30-day window
@@ -275,8 +296,8 @@ class TestCmdCost(unittest.TestCase):
         )
         # Force mtime to match the timestamp (cmd_cost uses mtime for --days filter)
         import time as _time
-        sixty_days_ago = _time.time() - 60 * 86400
         import os
+        sixty_days_ago = _time.time() - 60 * 86400
         os.utime(log, (sixty_days_ago, sixty_days_ago))
         out = self._run(days=30)
         self.assertIn("no log data found", out)
@@ -292,6 +313,50 @@ class TestCmdCost(unittest.TestCase):
         os.utime(log, (sixty_days_ago, sixty_days_ago))
         out = self._run(all_time=True)
         self.assertIn("old-job", out)
+
+
+class TestCmdHistory(unittest.TestCase):
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.jobs_dir = Path(self.tmp.name)
+        self.dag_logs_dir = self.jobs_dir / ".dag-logs"
+        self.dag_logs_dir.mkdir()
+        self._orig_jobs_dir = _mod.JOBS_DIR
+        self._orig_dag_logs = getattr(_mod, "DAG_LOGS_DIR", None)
+        _mod.JOBS_DIR = self.jobs_dir
+        _mod.DAG_LOGS_DIR = self.dag_logs_dir
+
+    def tearDown(self):
+        _mod.JOBS_DIR = self._orig_jobs_dir
+        if self._orig_dag_logs is None:
+            delattr(_mod, "DAG_LOGS_DIR")
+        else:
+            _mod.DAG_LOGS_DIR = self._orig_dag_logs
+        self.tmp.cleanup()
+
+    def _log(self, name: str, ts: str, pid: str, content: str) -> Path:
+        return _make_log(self.jobs_dir, name, ts, pid, content)
+
+    def _run(self, **kwargs) -> str:
+        buf = io.StringIO()
+        with patch("sys.stdout", buf):
+            _mod.cmd_history(**kwargs)
+        return buf.getvalue()
+
+    def test_real_dash_dag_job_history_excludes_orchestration_log(self):
+        self._log(
+            "standup-dag", "20260418T170000Z", "420",
+            '{"total_cost_usd":0.1250}\n{"terminal_reason":"completed"}\n--- exit_code=0 ---\n',
+        )
+        dag_log = self.dag_logs_dir / "standup-20260418T170500Z-421.log"
+        dag_log.write_text(
+            '{"total_cost_usd":9.9999}\n{"terminal_reason":"completed"}\n--- exit_code=0 ---\n'
+        )
+        out = self._run(job_filter="standup-dag", all_time=True)
+        self.assertIn("standup-dag", out)
+        self.assertIn("20260418T170000Z-420", out)
+        self.assertNotIn("20260418T170500Z-421", out)
 
 
 # ---------------------------------------------------------------------------

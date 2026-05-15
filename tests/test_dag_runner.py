@@ -6,6 +6,7 @@ Run: python3 -m unittest discover tests
 from __future__ import annotations
 
 import json
+import os
 import sys
 import tempfile
 import time
@@ -55,6 +56,21 @@ class _NullLogger:
 
 def _logger() -> _NullLogger:
     return _NullLogger()
+
+
+class TestDagLogger(unittest.TestCase):
+    def test_dag_logger_writes_to_dedicated_dag_log_dir(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            jobs_dir = Path(tmp) / ".clauck"
+            dag_logs_dir = jobs_dir / ".dag-logs"
+            with patch.object(dr, "JOBS_DIR", jobs_dir), \
+                 patch.object(dr, "DAG_LOGS_DIR", dag_logs_dir, create=True), \
+                 patch.object(dr.os, "getpid", return_value=123):
+                logger = dr.DagLogger("standup", "inv-1")
+
+            self.assertEqual(logger.log_path.parent, dag_logs_dir)
+            self.assertTrue(logger.log_path.exists())
+            self.assertIn("pid=123", logger.log_path.read_text())
 
 
 # ---------------------------------------------------------------------------
