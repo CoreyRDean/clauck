@@ -8,6 +8,7 @@ from __future__ import annotations
 import importlib.machinery
 import io
 import json
+import subprocess
 import sys
 import tempfile
 import time
@@ -317,6 +318,12 @@ class TestWriteAutoDraft(unittest.TestCase):
         self.assertIsNotNone(path)
         self.assertTrue(path.exists())
 
+    def test_legacy_scalar_mode_string_still_writes(self):
+        self.config_file.write_text(json.dumps({"auto_report": "draft"}))
+        path = _write_auto_draft("doctor", "A bug", "body")
+        self.assertIsNotNone(path)
+        self.assertTrue(path.exists())
+
     def test_custom_labels_stored(self):
         self._set_mode("draft")
         path = _write_auto_draft("agent", "t", "b", labels=["enhancement"])
@@ -427,3 +434,171 @@ class TestNotifyPendingAutoReports(unittest.TestCase):
             (self.reports / f"20260418T12000{i}Z-doctor-auto.json").write_text("{}")
         out = self._capture_notify()
         self.assertIn("3", out)
+
+    def test_legacy_scalar_mode_string_still_prints_notice(self):
+        self.config_file.write_text(json.dumps({"auto_report": "draft"}))
+        self.reports.mkdir()
+        (self.reports / "20260418T120000Z-doctor-auto.json").write_text("{}")
+        out = self._capture_notify()
+        self.assertIn("auto-report", out)
+
+
+class TestLegacyAutoReportConfigCompatibility(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        root = Path(self.tmp.name)
+        self.jobs_dir = root / "jobs"
+        self.jobs_dir.mkdir()
+        self.state_dir = self.jobs_dir / ".state"
+        self.state_dir.mkdir()
+        self.reports_dir = root / "reports"
+        self.reports_dir.mkdir()
+        self.config_file = root / "config.json"
+        self.version_file = root / ".version"
+        self.version_file.write_text("v1.5.7")
+        self.manifest_file = root / ".manifest.json"
+        self.manifest_file.write_text(json.dumps({"jobs": []}))
+        self._orig_jobs = _mod.JOBS_DIR
+        self._orig_state = _mod.STATE_DIR
+        self._orig_reports = _mod.REPORTS_DIR
+        self._orig_config = _mod.CONFIG_FILE
+        self._orig_version = _mod.VERSION_FILE
+        self._orig_manifest = _mod.MANIFEST
+        _mod.JOBS_DIR = self.jobs_dir
+        _mod.STATE_DIR = self.state_dir
+        _mod.REPORTS_DIR = self.reports_dir
+        _mod.CONFIG_FILE = self.config_file
+        _mod.VERSION_FILE = self.version_file
+        _mod.MANIFEST = self.manifest_file
+
+    def tearDown(self):
+        _mod.JOBS_DIR = self._orig_jobs
+        _mod.STATE_DIR = self._orig_state
+        _mod.REPORTS_DIR = self._orig_reports
+        _mod.CONFIG_FILE = self._orig_config
+        _mod.VERSION_FILE = self._orig_version
+        _mod.MANIFEST = self._orig_manifest
+        self.tmp.cleanup()
+
+    def test_main_list_does_not_brick_on_legacy_scalar_mode(self):
+        self.config_file.write_text(json.dumps({"auto_report": "draft"}))
+        with patch.object(_mod, "jit_update_check"), \
+                patch.object(_mod, "cmd_list") as mock_list, \
+                patch.object(sys, "argv", ["clauck", "list"]):
+            _mod.main()
+        mock_list.assert_called_once_with(tag_filter="")
+
+    def test_status_handles_legacy_scalar_mode_and_pending_drafts(self):
+        self.config_file.write_text(json.dumps({"auto_report": "draft"}))
+        (self.reports_dir / "20260418T120000Z-doctor-auto.json").write_text("{}")
+        buf = io.StringIO()
+        with patch("builtins.print", side_effect=lambda *a, **k: buf.write(" ".join(str(x) for x in a) + "\n")), \
+                patch.object(_mod.subprocess, "run", return_value=subprocess.CompletedProcess(["launchctl", "list"], 0, "", "")):
+            _mod.cmd_status()
+        out = buf.getvalue()
+        self.assertIn("auto-report: draft", out)
+        self.assertIn("auto-report drafts: 1 pending", out)
+
+
+class TestDoctorAutoReportHandoff(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        root = Path(self.tmp.name)
+        self.jobs_dir = root / "jobs"
+        self.jobs_dir.mkdir()
+        self.state_dir = self.jobs_dir / ".state"
+        self.state_dir.mkdir()
+        self.reports_dir = root / "reports"
+        self.config_file = root / "config.json"
+        self.config_file.write_text(json.dumps({"auto_report": {"mode": "draft"}}))
+        self._orig_jobs = _mod.JOBS_DIR
+        self._orig_state = _mod.STATE_DIR
+        self._orig_reports = _mod.REPORTS_DIR
+        self._orig_config = _mod.CONFIG_FILE
+        _mod.JOBS_DIR = self.jobs_dir
+        _mod.STATE_DIR = self.state_dir
+        _mod.REPORTS_DIR = self.reports_dir
+        _mod.CONFIG_FILE = self.config_file
+
+    def tearDown(self):
+        _mod.JOBS_DIR = self._orig_jobs
+        _mod.STATE_DIR = self._orig_state
+        _mod.REPORTS_DIR = self._orig_reports
+        _mod.CONFIG_FILE = self._orig_config
+        self.tmp.cleanup()
+
+    def test_dry_fix_prompt_writes_auto_draft_before_exec_handoff(self):
+        class ExecHandoff(Exception):
+            pass
+
+        class DummyThread:
+            def __init__(self, target=None, daemon=None):
+                self.target = target
+
+            def start(self):
+                return None
+
+            def join(self, timeout=None):
+                return None
+
+        stage1 = subprocess.CompletedProcess(
+            ["claude", "-p"],
+            0,
+            json.dumps({
+                "result": json.dumps({
+                    "interpretation": "Inspect install.sh drift",
+                    "task_complexity_scale": 0.2,
+                }),
+                "is_error": False,
+            }),
+            "",
+        )
+        stage2 = subprocess.CompletedProcess(
+            ["claude", "-p"],
+            0,
+            json.dumps({
+                "result": json.dumps({
+                    "report": "install.sh needs a clauck internal fix",
+                    "fix_instruction": "repair install.sh handling",
+                }),
+                "session_id": "session-123",
+                "is_error": False,
+            }),
+            "",
+        )
+
+        events = []
+
+        def fake_write_auto_draft(*args, **kwargs):
+            events.append("draft")
+            return self.reports_dir / "draft.json"
+
+        def fake_execvp(path, argv):
+            events.append("execvp")
+            raise ExecHandoff()
+
+        with patch.object(_mod, "_find_claude", return_value="/usr/bin/claude"), \
+                patch.object(_mod.sizing, "load_doctor_config", return_value={"scale_skew": 0.0, "max_budget_usd": 10.0}), \
+                patch.object(_mod.sizing, "estimate_tokens", return_value=0), \
+                patch.object(_mod.sizing, "compute_sizing", return_value={
+                    "model": "haiku",
+                    "effort": "low",
+                    "max_turns": 2,
+                    "max_budget_usd": 1.0,
+                    "explanation": "scaled",
+                    "base_cost": 0.0,
+                    "context_cost": 0.0,
+                    "headroom": 1.3,
+                }), \
+                patch.object(_mod.subprocess, "run", side_effect=[stage1, stage2]), \
+                patch.object(_mod, "_write_auto_draft", side_effect=fake_write_auto_draft), \
+                patch("threading.Thread", DummyThread), \
+                patch.object(sys.stdin, "isatty", return_value=True), \
+                patch.object(sys.stdout, "isatty", return_value=True), \
+                patch("builtins.input", return_value=""), \
+                patch.object(_mod.os, "execvp", side_effect=fake_execvp), \
+                patch.object(sys, "argv", ["clauck", "doctor", "--dry", "check install.sh"]):
+            with self.assertRaises(ExecHandoff):
+                _mod.cmd_doctor(dry=True, fix=False, safe=True, unsafe=False, interactive=False, context="check install.sh")
+
+        self.assertEqual(events, ["draft", "execvp"])
