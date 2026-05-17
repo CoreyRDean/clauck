@@ -1,4 +1,4 @@
-"""Tests for solo revive config resolution and explicit resume precedence.
+"""Tests for revive command flows and explicit resume precedence.
 
 Run: python3 -m unittest tests.test_clauck_revive
 """
@@ -118,6 +118,117 @@ class TestCmdReviveSoloEnv(unittest.TestCase):
         self.assertEqual(revive_payload["consumers"], ["downstream-a", "downstream-b"])
         self.assertEqual(list(self.broken_dir.glob("logical-job-*.json")), [])
         self.assertIn("tail logs with: clauck logs logical-job --show", stdout.getvalue())
+
+
+class TestCmdReviveDagResume(unittest.TestCase):
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmp.name)
+        self.jobs_dir = self.root / "jobs"
+        self.jobs_dir.mkdir()
+        self.state_dir = self.root / "state"
+        self.state_dir.mkdir()
+        self.broken_dir = self.root / "broken"
+        self.broken_dir.mkdir()
+        self.run_job = self.jobs_dir / "run-job.sh"
+        self.run_job.write_text("#!/bin/zsh\nexit 0\n", encoding="utf-8")
+        self.run_job.chmod(self.run_job.stat().st_mode | stat.S_IXUSR)
+        self.dag_runner = self.jobs_dir / "dag-runner.py"
+        self.dag_runner.write_text("#!/usr/bin/python3\n", encoding="utf-8")
+        self.dag_state_dir = self.state_dir / ".dag-invocations"
+        self.dag_state_dir.mkdir()
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def test_revive_uses_dag_runner_when_fresh_invocation_state_exists(self):
+        _make_tombstone(
+            self.broken_dir,
+            "logical-job",
+            dag_invocation_id="dag-123",
+            dag_root="root-job",
+        )
+        (self.dag_state_dir / "dag-123.json").write_text("{}", encoding="utf-8")
+        job_config = {"name": "logical-job", "consumers": ["downstream-a"]}
+        stdout = io.StringIO()
+
+        with patch.object(clauck, "JOBS_DIR", self.jobs_dir), \
+             patch.object(clauck, "STATE_DIR", self.state_dir), \
+             patch.object(clauck, "BROKEN_DIR", self.broken_dir), \
+             patch.object(clauck, "_discover_job_config", return_value=job_config), \
+             patch("sys.stdout", stdout), \
+             patch.object(clauck.subprocess, "Popen") as mock_popen:
+            clauck.cmd_revive("logical-job")
+
+        args, kwargs = mock_popen.call_args
+        self.assertEqual(
+            args[0],
+            ["/usr/bin/python3", str(self.dag_runner), "--resume", "dag-123"],
+        )
+        self.assertEqual(kwargs["env"]["CLAUDE_JOB_TRIGGER"], "revive-dag")
+
+        revive_payload = json.loads((self.state_dir / "logical-job.revive.json").read_text())
+        self.assertEqual(revive_payload["session_id"], "revive-session-123")
+        self.assertEqual(revive_payload["consumers"], [])
+        self.assertEqual(list(self.broken_dir.glob("logical-job-*.json")), [])
+        self.assertIn("tail dag log with: clauck logs root-job --follow", stdout.getvalue())
+
+
+class TestCmdReviveErrors(unittest.TestCase):
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmp.name)
+        self.jobs_dir = self.root / "jobs"
+        self.jobs_dir.mkdir()
+        self.state_dir = self.root / "state"
+        self.state_dir.mkdir()
+        self.broken_dir = self.root / "broken"
+        self.broken_dir.mkdir()
+        self.run_job = self.jobs_dir / "run-job.sh"
+        self.run_job.write_text("#!/bin/zsh\nexit 0\n", encoding="utf-8")
+        self.run_job.chmod(self.run_job.stat().st_mode | stat.S_IXUSR)
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def test_missing_tombstone_exits_with_helpful_error(self):
+        stderr = io.StringIO()
+        with patch.object(clauck, "BROKEN_DIR", self.broken_dir), \
+             patch("sys.stderr", stderr):
+            with self.assertRaises(SystemExit) as exc:
+                clauck.cmd_revive("missing-job")
+        self.assertEqual(exc.exception.code, 1)
+        self.assertIn("no broken tombstone found for: missing-job", stderr.getvalue())
+
+    def test_stale_tombstone_exits_before_revive(self):
+        _make_tombstone(
+            self.broken_dir,
+            "logical-job",
+            ts=(datetime.now(timezone.utc) - timedelta(hours=clauck.BROKEN_RETENTION_HOURS + 1)).isoformat(),
+        )
+        stderr = io.StringIO()
+        with patch.object(clauck, "JOBS_DIR", self.jobs_dir), \
+             patch.object(clauck, "STATE_DIR", self.state_dir), \
+             patch.object(clauck, "BROKEN_DIR", self.broken_dir), \
+             patch("sys.stderr", stderr):
+            with self.assertRaises(SystemExit) as exc:
+                clauck.cmd_revive("logical-job")
+        self.assertEqual(exc.exception.code, 1)
+        self.assertIn("session may no longer be resumable", stderr.getvalue())
+
+    def test_missing_session_id_exits_before_subprocess_spawn(self):
+        _make_tombstone(self.broken_dir, "logical-job", session_id="")
+        stderr = io.StringIO()
+        with patch.object(clauck, "JOBS_DIR", self.jobs_dir), \
+             patch.object(clauck, "STATE_DIR", self.state_dir), \
+             patch.object(clauck, "BROKEN_DIR", self.broken_dir), \
+             patch("sys.stderr", stderr):
+            with self.assertRaises(SystemExit) as exc:
+                clauck.cmd_revive("logical-job")
+        self.assertEqual(exc.exception.code, 1)
+        self.assertIn("has no session_id", stderr.getvalue())
 
 
 class TestRunJobResumePrecedence(unittest.TestCase):
