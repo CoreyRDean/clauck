@@ -1,8 +1,8 @@
-module-demo — reference module-format clauck job
+module-demo — reference module-format Clauck Cycle
 ==================================================
 
-This directory demonstrates the module format for marketplace jobs. Use it as
-a copy-paste starting point when building jobs that need more than one file.
+This directory demonstrates the module format for marketplace Cycles. Use it as
+a copy-paste starting point when building Cycles that need more than one file.
 
 Shape
 -----
