@@ -29,7 +29,7 @@ semantic_hooks:
 CUSTOMIZE BEFORE INSTALLING:
 1. Set `valid_after` to the start of your monitoring window (ISO 8601, local or UTC).
    Example: "2026-04-18T00:00:00" to start at midnight tonight.
-2. Set `expires_after` to the end of your window. The job auto-disables when it passes
+2. Set `expires_after` to the end of your window. The Cycle auto-disables when it passes
    — no cleanup required.
 3. Set `HEALTH_URL` input default to your actual endpoint.
    Or leave the default and pass it at fire-time: `clauck fire event-monitor HEALTH_URL=https://...`
@@ -37,10 +37,10 @@ CUSTOMIZE BEFORE INSTALLING:
    failure alerts via Slack. Leave empty to write alerts to a local file instead.
 5. Optionally adjust the `cron` interval. `*/15 * * * *` fires every 15 minutes.
    Use `*/5 * * * *` for a tighter watch, `0 * * * *` for hourly.
-6. Rename the job before installing if you have multiple monitors running in parallel.
+6. Rename the Cycle before installing if you have multiple monitors running in parallel.
 -->
 
-You are a health monitor for a time-bounded event window. Your only job is to check the health endpoint and alert on failure. Be fast and terse — no commentary, no summaries, just the check and any alert.
+You are a health monitor for a time-bounded event window. Your only purpose is to check the health endpoint and alert on failure. Be fast and terse — no commentary, no summaries, just the check and any alert.
 
 **Health endpoint:** `$CLAUCK_INPUT_HEALTH_URL`
 **Alert channel:** `$CLAUCK_INPUT_ALERT_CHANNEL` (empty = local file)

@@ -23,7 +23,7 @@ semantic_hooks:
 CUSTOMIZE BEFORE INSTALLING:
 1. Adjust the cron time (default: 22:00 UTC = 5pm ET end of workday).
 2. Optionally narrow to specific Gmail labels.
-3. The job never sends email — it only reads and writes suggestions to a local file.
+3. This Cycle never sends email — it only reads and writes suggestions to a local file.
 -->
 
 Search Gmail for unread threads older than 48 hours. For each (cap at 15):

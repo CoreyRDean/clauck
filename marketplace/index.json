@@ -1,6 +1,6 @@
 {
   "version": "v0.1.2",
-  "description": "Curated pre-made Clauck Cycles (scheduled-job prompts). Browse by category or tags; ask Claude to copy one into your scheduled-jobs directory to install.",
+  "description": "Curated pre-made Clauck Cycles. Browse by category or tags, then ask Claude to copy one into ~/.clauck/ to install it.",
   "jobs": [
     {
       "name": "morning-brief",
@@ -114,7 +114,7 @@
       "path": "module-demo/",
       "category": "example",
       "tags": ["example", "module", "reference"],
-      "one_line": "Reference module-format marketplace job. Demonstrates the <name>/JOB.md directory shape for multi-file jobs.",
+      "one_line": "Reference module-format marketplace Cycle. Demonstrates the <name>/JOB.md directory shape for multi-file Cycles.",
       "schedule": "ad-hoc only",
       "cost_per_run_usd_approx": 0.01,
       "runs_per_month_approx": 0,
@@ -122,7 +122,7 @@
       "requires": {
         "mcps": "none",
         "setup": [
-          "Copy this directory as a starting point when building multi-file jobs.",
+          "Copy this directory as a starting point when building multi-file Cycles.",
           "Add stage files (<stage>.md) and declare them via producers/consumers on JOB.md."
         ]
       }
@@ -142,7 +142,7 @@
         "mcps": "none (local file fallback) or Slack (for push alerts)",
         "setup": [
           "Set valid_after to your window start (ISO 8601).",
-          "Set expires_after to your window end — job auto-disables when it passes.",
+          "Set expires_after to your window end — the Cycle auto-disables when it passes.",
           "Set HEALTH_URL input default to your endpoint.",
           "Optionally set ALERT_CHANNEL to a Slack DM or channel ID."
         ]
@@ -172,7 +172,7 @@
       "path": "dynamic-context-demo.md",
       "category": "example",
       "tags": ["example", "templating", "demo", "reference"],
-      "one_line": "Reference job demonstrating {{cmd:}} inline bash templating — injects live date and git state into the prompt body.",
+      "one_line": "Reference Cycle demonstrating {{cmd:}} inline bash templating — injects live date and git state into the prompt body.",
       "schedule": "ad-hoc only (customize cron to taste)",
       "cost_per_run_usd_approx": 0.01,
       "runs_per_month_approx": 0,

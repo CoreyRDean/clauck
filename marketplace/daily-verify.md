@@ -56,4 +56,4 @@ Run `claude mcp list` via Bash to get CLI-scope MCPs. For additional claude.ai-i
 **Failure handling:**
 If the post itself fails, do not retry more than once. Write the verbatim error to stdout and exit. The log file's `--- exit_code=N ===` tombstone is the fallback evidence surface.
 
-Don't do anything else. This job is the canary, not the fix.
+Don't do anything else. This Cycle is the canary, not the fix.

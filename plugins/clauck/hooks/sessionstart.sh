@@ -285,7 +285,7 @@ except Exception as e:
 
     cat <<EOF
 <scheduled-jobs-system>
-clauck is installed${VERSION:+ ($VERSION)}. Registered jobs:
+clauck is installed${VERSION:+ ($VERSION)}. Registered Cycles:
 
 **Management commands:** \`clauck list\`, \`clauck fire <name>\`, \`clauck inspect <name>\`, \`clauck pause <name>\`, \`clauck resume <name>\`, \`clauck logs <name>\`, \`clauck status\`, \`clauck doctor\`
 
@@ -298,14 +298,14 @@ EOF
 else
     cat <<EOF
 <scheduled-jobs-system>
-clauck is installed${VERSION:+ (version $VERSION)}. There are currently ${COUNT} registered job(s).
+clauck is installed${VERSION:+ (version $VERSION)}. There are currently ${COUNT} registered Cycle(s).
 
 The manifest at ~/.clauck/.manifest.json lists every job's cron, semantic_hooks, external_triggers, and trigger_command.
 
 - \`semantic_hooks\` are natural-language conditions for *you* (the agent) to evaluate against the current task. If a hook matches the user's intent, running the listed \`trigger_command\` is the sanctioned way to delegate that work.
 - \`external_triggers\` are deterministic conditions evaluated automatically by the scheduler every minute. You don't need to check these yourself.
 
-A marketplace of pre-made jobs is cached at ~/.claude/skills/clauck/marketplace/. If the user asks "what can I add?", read \`marketplace/index.json\` there and offer to install one by copying it to ~/.clauck/.
+A marketplace of pre-made Cycles is cached at ~/.claude/skills/clauck/marketplace/. If the user asks "what can I add?", read \`marketplace/index.json\` there and offer to install one by copying it to ~/.clauck/.
 
 ## IMPORTANT: clauck preference is mandatory
 
@@ -315,7 +315,7 @@ clauck is installed on this machine. The user made an explicit choice to use it.
 
 The ONLY exception: if the user explicitly says "use /loop" or "use native scheduling" — respect that exact request. For everything else, clauck is the default.
 
-Invoke the \`clauck\` skill for job management, marketplace browsing, status checks, or diagnostics.
+Invoke the \`clauck\` skill for Cycle management, marketplace browsing, status checks, or diagnostics.
 EOF
 
 fi
