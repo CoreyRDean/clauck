@@ -122,6 +122,8 @@ KNOWN_COMMANDS = {
     "-h", "--help", "help",
 }
 
+AUTO_REPORT_MODES = {"off", "draft", "auto"}
+
 
 # ── helpers ──────────────────────────────────────────────────────────────
 
@@ -158,7 +160,7 @@ def jit_update_check() -> None:
 
 def _notify_pending_auto_reports() -> None:
     """Print a one-line notice if background agents have queued auto-draft reports."""
-    auto_report_mode = load_config().get("auto_report", {}).get("mode", "off")
+    auto_report_mode = _auto_report_mode()
     if auto_report_mode == "off" or not REPORTS_DIR.exists():
         return
     auto_drafts = list(REPORTS_DIR.glob("*-auto.json"))
@@ -186,6 +188,19 @@ def load_config() -> dict:
         except (OSError, ValueError):
             return {}
     return {}
+
+
+def _auto_report_mode(config: dict | None = None) -> str:
+    """Return the normalized auto-report mode from current or provided config."""
+    cfg = config if config is not None else load_config()
+    raw = cfg.get("auto_report", {})
+    if isinstance(raw, dict):
+        mode = raw.get("mode", "off")
+    elif isinstance(raw, str):
+        mode = raw
+    else:
+        mode = "off"
+    return mode if isinstance(mode, str) and mode in AUTO_REPORT_MODES else "off"
 
 
 def _load_scheduler_module():
@@ -499,7 +514,7 @@ def cmd_status() -> None:
     print(f"  notifications: {'on' if notif else 'off'} (toggle: clauck config set notifications true/false)")
 
     # Check for pending auto-report drafts
-    auto_report_mode = config.get("auto_report", {}).get("mode", "off")
+    auto_report_mode = _auto_report_mode(config)
     print(f"  auto-report: {auto_report_mode}"
           f" (change: clauck config set auto_report.mode draft|auto|off)")
     if auto_report_mode != "off" and REPORTS_DIR.exists():
@@ -3430,6 +3445,18 @@ def cmd_doctor(
             print(str(err_text).strip(), file=sys.stderr)
         sys.exit(1)
 
+    should_auto_draft = False
+    auto_draft_title = ""
+    auto_draft_dedupe = ""
+    if dry and claude_result:
+        combined = (claude_result + " " + fix_instruction).lower()
+        if any(f in combined for f in _CLAUCK_SYSTEM_FILES):
+            import hashlib as _hl
+            dedup_src = (fix_instruction or claude_result[:200]).encode()
+            auto_draft_dedupe = f"doctor-{_hl.md5(dedup_src).hexdigest()[:12]}"
+            auto_draft_title = (fix_instruction or "clauck system issue detected by doctor")[:120]
+            should_auto_draft = True
+
     # Auto-prompt: if the diagnostic model queued a fix instruction and we're
     # running attached to a tty, offer to run it without the user retyping. The
     # instruction is passed as a single argv element to a re-invocation of this
@@ -3444,6 +3471,14 @@ def cmd_doctor(
             print()
             return
         if resp in ("", "y", "yes"):
+            if should_auto_draft:
+                _write_auto_draft(
+                    source="clauck-doctor",
+                    title=auto_draft_title,
+                    body=f"## Doctor finding\n\n{claude_result[:1500]}",
+                    labels=["bug"],
+                    dedupe_key=auto_draft_dedupe,
+                )
             fix_argv = [sys.argv[0], "doctor", "--fix"]
             if not safe:
                 # Preserve --unsafe only if the original invocation was --unsafe.
@@ -3457,20 +3492,14 @@ def cmd_doctor(
     # REPORTS_DIR so the user can review and submit it later.  The heuristic
     # is conservative: we only fire when the doctor report or fix_instruction
     # text references a known clauck internal file name.
-    if dry and claude_result and not is_error:
-        combined = (claude_result + " " + fix_instruction).lower()
-        if any(f in combined for f in _CLAUCK_SYSTEM_FILES):
-            import hashlib as _hl
-            dedup_src = (fix_instruction or claude_result[:200]).encode()
-            dedup = _hl.md5(dedup_src).hexdigest()[:12]
-            draft_title = (fix_instruction or "clauck system issue detected by doctor")[:120]
-            _write_auto_draft(
-                source="clauck-doctor",
-                title=draft_title,
-                body=f"## Doctor finding\n\n{claude_result[:1500]}",
-                labels=["bug"],
-                dedupe_key=f"doctor-{dedup}",
-            )
+    if should_auto_draft:
+        _write_auto_draft(
+            source="clauck-doctor",
+            title=auto_draft_title,
+            body=f"## Doctor finding\n\n{claude_result[:1500]}",
+            labels=["bug"],
+            dedupe_key=auto_draft_dedupe,
+        )
 
     # Optional interactive follow-up on a resolvable session.
     if interactive and session_id:
@@ -3813,7 +3842,7 @@ def _write_auto_draft(
     """
     import time as _t
 
-    auto_report_mode = load_config().get("auto_report", {}).get("mode", "off")
+    auto_report_mode = _auto_report_mode()
     if auto_report_mode == "off":
         return None
 
