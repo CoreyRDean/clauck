@@ -1,6 +1,7 @@
-"""Unit tests for budget circuit-breaker tombstone helpers in lib/clauck.
+"""Unit tests for circuit-breaker tombstone helpers and commands in lib/clauck.
 
-Covers: _format_age, _tombstone_age_hours, _list_tombstones, _find_tombstone.
+Covers: _format_age, _tombstone_age_hours, _list_tombstones, _find_tombstone,
+cmd_broken, and cmd_discard.
 
 Run: python3 -m unittest tests.test_clauck
 """
@@ -8,6 +9,7 @@ Run: python3 -m unittest tests.test_clauck
 from __future__ import annotations
 
 import importlib.util
+import io
 import json
 import os
 import sys
@@ -219,6 +221,86 @@ class TestFindTombstone(unittest.TestCase):
             result = clauck._find_tombstone("repeat-job")
         # Should return the more-recent one (hours_ago=1.0, spend_usd=2.0)
         self.assertAlmostEqual(result["spend_usd"], 2.0)
+
+
+class TestCmdBroken(unittest.TestCase):
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self._broken_dir = Path(self._tmp.name)
+
+    def tearDown(self):
+        self._tmp.cleanup()
+
+    def _patch_broken_dir(self):
+        return patch.object(clauck, "BROKEN_DIR", self._broken_dir)
+
+    def test_prints_empty_state_when_no_tombstones(self):
+        stdout = io.StringIO()
+        with self._patch_broken_dir(), patch("sys.stdout", stdout):
+            clauck.cmd_broken()
+        self.assertEqual(stdout.getvalue().strip(), "no broken jobs")
+
+    def test_lists_sorted_tombstones_and_marks_stale_entries(self):
+        _make_stone(
+            self._broken_dir,
+            "repeat-job",
+            hours_ago=clauck.BROKEN_RETENTION_HOURS + 2,
+            spend_usd=1.25,
+            session_id="stale-session-1234567890",
+        )
+        _make_stone(
+            self._broken_dir,
+            "repeat-job",
+            hours_ago=1.0,
+            spend_usd=0.75,
+            session_id="fresh-session-1234567890",
+        )
+
+        stdout = io.StringIO()
+        with self._patch_broken_dir(), patch("sys.stdout", stdout):
+            clauck.cmd_broken()
+
+        out = stdout.getvalue()
+        self.assertIn("job", out)
+        self.assertIn("reason", out)
+        self.assertIn("revive: clauck revive <name>", out)
+        self.assertIn("discard: clauck discard <name>", out)
+        self.assertIn("repeat-job", out)
+        self.assertIn("[stale]", out)
+        self.assertLess(out.index("fresh-session-1234567890"), out.index("stale-session-1234567890"))
+
+
+class TestCmdDiscard(unittest.TestCase):
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self._broken_dir = Path(self._tmp.name)
+
+    def tearDown(self):
+        self._tmp.cleanup()
+
+    def _patch_broken_dir(self):
+        return patch.object(clauck, "BROKEN_DIR", self._broken_dir)
+
+    def test_removes_all_matching_tombstones_and_reports_count(self):
+        _make_stone(self._broken_dir, "repeat-job", hours_ago=5.0)
+        _make_stone(self._broken_dir, "repeat-job", hours_ago=1.0)
+        _make_stone(self._broken_dir, "other-job", hours_ago=1.0)
+
+        stdout = io.StringIO()
+        with self._patch_broken_dir(), patch("sys.stdout", stdout):
+            clauck.cmd_discard("repeat-job")
+
+        self.assertEqual(list(self._broken_dir.glob("repeat-job-*.json")), [])
+        self.assertEqual(len(list(self._broken_dir.glob("other-job-*.json"))), 1)
+        self.assertIn("discarded 2 tombstone(s) for: repeat-job", stdout.getvalue())
+
+    def test_reports_missing_tombstone_without_error(self):
+        stdout = io.StringIO()
+        with self._patch_broken_dir(), patch("sys.stdout", stdout):
+            clauck.cmd_discard("missing-job")
+        self.assertIn("no tombstone found for: missing-job", stdout.getvalue())
 
 
 if __name__ == "__main__":
