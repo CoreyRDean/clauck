@@ -33,8 +33,10 @@ class TestActiveLog(unittest.TestCase):
     def setUp(self):
         self.tmpdir = tempfile.mkdtemp()
         self.jobs_dir = Path(self.tmpdir) / ".clauck"
+        self.dag_logs_dir = self.jobs_dir / ".dag-logs"
         self.state_dir = self.jobs_dir / ".state"
         self.jobs_dir.mkdir()
+        self.dag_logs_dir.mkdir()
         self.state_dir.mkdir()
 
     def tearDown(self):
@@ -45,6 +47,7 @@ class TestActiveLog(unittest.TestCase):
         return patch.multiple(
             "clauck",
             JOBS_DIR=self.jobs_dir,
+            DAG_LOGS_DIR=self.dag_logs_dir,
             STATE_DIR=self.state_dir,
         )
 
@@ -111,6 +114,13 @@ class TestActiveLog(unittest.TestCase):
         # no pid file
         with self._patch_dirs():
             self.assertIsNone(clauck._active_log("myjob"))
+
+    def test_active_dag_log_uses_dedicated_dag_log_dir(self):
+        dag_log = self.dag_logs_dir / "pipeline-20260417T170000Z-123.log"
+        dag_log.write_text("=== dag start ===\npid=%d\n" % os.getpid())
+        with self._patch_dirs():
+            result = clauck._active_dag_log("pipeline")
+        self.assertEqual(result, dag_log)
 
 
 class TestFollowLog(unittest.TestCase):

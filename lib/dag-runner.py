@@ -31,6 +31,7 @@ from pathlib import Path
 
 HOME = Path(os.environ.get("HOME", str(Path.home())))
 JOBS_DIR = HOME / ".clauck"
+DAG_LOGS_DIR = JOBS_DIR / ".dag-logs"
 STATE_DIR = JOBS_DIR / ".state"
 INVOCATION_DIR = STATE_DIR / ".dag-invocations"
 MANIFEST_PATH = JOBS_DIR / ".manifest.json"
@@ -63,10 +64,10 @@ class DagLogger:
         self.invocation_id = invocation_id
         ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
         pid = os.getpid()
-        self.log_path = JOBS_DIR / f"{root_name}-dag-{ts}-{pid}.log"
+        self.log_path = DAG_LOGS_DIR / f"{root_name}-{ts}-{pid}.log"
         self.oplog: list[dict] = []
         # Create log file immediately so failures are observable.
-        JOBS_DIR.mkdir(parents=True, exist_ok=True)
+        DAG_LOGS_DIR.mkdir(parents=True, exist_ok=True)
         self._write(f"=== dag-runner start: {root_name} @ {ts} ===")
         self._write(f"invocation_id={invocation_id}")
         self._write(f"pid={pid}")
